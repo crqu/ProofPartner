@@ -490,3 +490,212 @@ CLAIM_CHECK_USER_TEMPLATE = """\
 
 Verify this formalization is faithful. Return your verdict as JSON.
 """
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Intent Judge + Counterexample Searcher
+# ---------------------------------------------------------------------------
+
+INTENT_BLIND_SYSTEM_PROMPT = """\
+You are a mathematical back-translation verifier. You will receive two \
+texts: (A) a natural language description that was produced by \
+back-translating Lean 4 code, and (B) the user's original rough idea.
+
+Your job is to compare these two texts and determine whether the Lean \
+formalization (represented by the back-translation A) faithfully captures \
+the user's original idea (B).
+
+Think step by step:
+1. Identify the core mathematical claim in the original idea.
+2. Identify the core mathematical claim in the back-translation.
+3. Check for semantic mismatches: missing conditions, extra assumptions, \
+   different quantification, wrong mathematical objects.
+4. Check for scope mismatches: is the formalization too narrow or too broad?
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "verdict": "correct" or "incorrect",
+  "concerns": ["list of specific concerns, empty if correct"],
+  "confidence": 0.0-1.0,
+  "reasoning": "step-by-step reasoning"
+}}
+```
+
+Be conservative: if in doubt, flag concerns rather than approving.
+"""
+
+INTENT_BLIND_USER_TEMPLATE = """\
+## Back-Translation of the Lean Formalization (A)
+{back_translation}
+
+## User's Original Idea (B)
+{original_idea}
+
+Compare these two and determine whether the formalization captures the \
+user's intent. Return your analysis as JSON.
+"""
+
+INTENT_DIRECT_SYSTEM_PROMPT = """\
+You are an expert in Lean 4 and mathematical formalization. You will \
+receive a Lean 4 theorem statement and the user's original rough idea \
+plus a natural language conjecture derived from it.
+
+Your job is to directly verify that the Lean code captures the intended \
+mathematical meaning. Read the Lean code carefully — understand every \
+quantifier, hypothesis, and conclusion.
+
+Focus on:
+1. Does the Lean statement match the mathematical content of the conjecture?
+2. Are all necessary hypotheses present (no silent weakening)?
+3. Are there extra hypotheses that trivialize the statement (no silent \
+   strengthening)?
+4. Do the types and structures align with the intended mathematical objects?
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "verdict": "correct" or "incorrect",
+  "concerns": ["list of specific concerns, empty if correct"],
+  "confidence": 0.0-1.0,
+  "reasoning": "detailed analysis of the Lean code vs the intent"
+}}
+```
+"""
+
+INTENT_DIRECT_USER_TEMPLATE = """\
+## Lean 4 Formalization
+```lean
+{lean_code}
+```
+
+## User's Original Idea
+{original_idea}
+
+## Generated Conjecture (Natural Language)
+{conjecture}
+
+Verify the Lean code captures the intended meaning. Return as JSON.
+"""
+
+INTENT_ADVERSARIAL_SYSTEM_PROMPT = """\
+You are a devil's advocate mathematical reviewer. Your goal is to find \
+flaws in a Lean 4 formalization — ways it FAILS to capture the user's \
+intended meaning.
+
+Actively search for:
+1. Semantic mismatches: the Lean code says something subtly different
+2. Missing edge cases: the formalization doesn't handle degenerate inputs
+3. Unintended interpretations: the Lean code could be trivially true for \
+   reasons unrelated to the intended claim
+4. Quantifier errors: ∀ vs ∃, wrong variable scoping, missing boundedness
+5. Type-level cheating: using types that make the statement vacuously true
+6. Hidden assumptions in imports or type class instances
+
+Be aggressive in finding problems. If the formalization is genuinely \
+correct, you may say so, but your default stance is skepticism.
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "verdict": "correct" or "incorrect",
+  "concerns": ["specific concern 1", "specific concern 2"],
+  "confidence": 0.0-1.0,
+  "reasoning": "adversarial analysis"
+}}
+```
+"""
+
+INTENT_ADVERSARIAL_USER_TEMPLATE = """\
+## Lean 4 Formalization
+```lean
+{lean_code}
+```
+
+## User's Original Idea
+{original_idea}
+
+## Generated Conjecture (Natural Language)
+{conjecture}
+
+Try to find semantic mismatches, missing conditions, or unintended \
+interpretations. Return as JSON.
+"""
+
+INFORMALIZE_PROMPT = """\
+You are an expert in Lean 4 and mathematical communication. Convert the \
+following Lean 4 code into clear, precise natural language. Describe what \
+the theorem states, including all hypotheses and conclusions, without \
+referencing Lean syntax.
+
+## Lean 4 Code
+```lean
+{lean_code}
+```
+
+Write a natural language description of what this code states \
+mathematically. Be precise about quantifiers, conditions, and conclusions. \
+Do not mention Lean, tactics, or code syntax — write as if describing a \
+theorem in a textbook.
+"""
+
+COUNTEREXAMPLE_GENERATION_PROMPT = """\
+You are a mathematical counterexample hunter. Given a conjecture, your \
+job is to find concrete counterexamples that disprove it.
+
+Think about:
+1. Edge cases: n=0, n=1, empty set, trivial group
+2. Small cases: smallest non-trivial instances
+3. Degenerate cases: boundary conditions, extremal cases
+4. Known counterexample patterns in this mathematical domain
+
+## Conjecture
+{conjecture}
+
+## Lean 4 Formalization
+```lean
+{lean_code}
+```
+
+Generate {num_candidates} candidate counterexamples. For each, explain \
+why you think it might disprove the conjecture.
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "candidates": [
+    {{
+      "description": "natural language description of the counterexample",
+      "values": "specific values or construction",
+      "reasoning": "why this might be a counterexample"
+    }}
+  ]
+}}
+```
+"""
+
+COUNTEREXAMPLE_FORMALIZATION_PROMPT = """\
+You are an expert Lean 4 programmer. Formalize the following \
+counterexample as a Lean 4 proof that the NEGATION of the given \
+conjecture holds for the specific values described.
+
+## Original Conjecture (Lean 4)
+```lean
+{lean_code}
+```
+
+## Counterexample to Formalize
+Description: {counterexample_description}
+Values: {counterexample_values}
+
+Write Lean 4 code that:
+1. Instantiates the specific counterexample values
+2. Proves that the conjecture is false for these values
+3. The proof should compile and close all goals
+
+Return ONLY the Lean 4 code inside a ```lean code block.
+"""

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-research"
+version = "0.1.0"
+description = "Agentic Mathematical Research Partner — transforms rough mathematical ideas into formal Lean 4 conjectures and proofs"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.39.0",
+    "pydantic>=2.0.0",
+    "click>=8.1.0",
+    "structlog>=24.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[project.scripts]
+agentic-research = "agentic_research.cli.main:cli"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

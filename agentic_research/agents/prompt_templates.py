@@ -964,6 +964,104 @@ that would fix the failure. Return a JSON object:
 ```
 """
 
+# ---------------------------------------------------------------------------
+# Phase 8: Conjecture Refinement Loop
+# ---------------------------------------------------------------------------
+
+CONJECTURE_REFINEMENT_SYSTEM = """\
+You are an expert mathematical conjecture refiner. Given a conjecture that \
+has been disproved or failed to be proved, produce refined variants using \
+the specified refinement strategy.
+
+## Strategies
+
+1. **Weakening**: add hypotheses, restrict to special cases, reduce quantifier \
+   strength (∀→∃, "for all n" → "for sufficiently large n")
+2. **Strengthening**: if the conjecture was too weak to be interesting, \
+   strengthen it and check if provability is maintained
+3. **Reformulation**: express the same idea in a different mathematical \
+   framework (e.g., algebraic → combinatorial)
+4. **Specialization**: try specific instances (n=2, finite case, commutative case)
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "refined_conjectures": [
+    {{
+      "statement": "formal-ish mathematical statement",
+      "natural_language": "plain English description",
+      "confidence": 0.0-1.0,
+      "difficulty": 1-5,
+      "related_results": [],
+      "novelty_score": 0.0-1.0,
+      "formalizability_score": 0.0-1.0,
+      "refinement_reasoning": "why this refinement addresses the failure"
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Generate 2-4 refined variants
+- Each variant should address the specific failure reason
+- Maintain the spirit of the original conjecture
+- Weakened variants should have higher confidence estimates
+- Specialized variants should have higher formalizability scores
+"""
+
+CONJECTURE_REFINEMENT_USER_TEMPLATE = """\
+## Original Conjecture
+Statement: {original_statement}
+Natural Language: {original_nl}
+
+## Failure Information
+Outcome: {failure_outcome}
+Reason: {failure_reason}
+
+## Refinement Strategy
+{strategy}
+
+## Original Idea (context)
+{original_idea}
+
+Produce refined variants of this conjecture using the specified strategy. \
+Return as JSON.
+"""
+
+REFINEMENT_REPORT_SYSTEM = """\
+You are a mathematical research reporter. Generate a clear, structured \
+report of a conjecture refinement journey — from the original conjecture \
+through each refinement attempt to the final outcome.
+
+## Output Format
+Write a markdown report with these sections:
+1. **Original Conjecture** — what was originally proposed
+2. **Refinement Journey** — for each step: what was tried, why it failed, \
+   what was changed
+3. **Final Outcome** — what was proved (or why all attempts were exhausted)
+4. **Key Insights** — what the refinement process revealed about the \
+   mathematical structure
+
+Be concise but precise. Use mathematical notation where helpful.
+"""
+
+REFINEMENT_REPORT_USER_TEMPLATE = """\
+## Original Idea
+{original_idea}
+
+## Original Conjecture
+{original_conjecture}
+
+## Refinement Attempts
+{attempts}
+
+## Final Status
+{final_status}
+
+Generate a human-readable markdown report of this refinement journey.
+"""
+
 FLATTEN_PROOF_TEMPLATE = """\
 Assemble these individually proved lemmas into a single self-contained \
 Lean 4 proof. Remove any unused lemmas and ensure the final proof compiles.

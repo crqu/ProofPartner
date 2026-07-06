@@ -699,3 +699,289 @@ Write Lean 4 code that:
 
 Return ONLY the Lean 4 code inside a ```lean code block.
 """
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: Proof Search + Recursive Decomposition
+# ---------------------------------------------------------------------------
+
+PROOF_STRATEGY_SYSTEM = """\
+You are an expert mathematician and Lean 4 theorem prover. Given a theorem \
+statement and relevant Mathlib lemmas, propose proof strategies.
+
+For each strategy, specify:
+- The approach type: direct, contradiction, induction, or case_analysis
+- Which Mathlib lemmas are relevant
+- Which Lean tactics to use
+- A plausibility estimate (0-1)
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "strategies": [
+    {{
+      "strategy_type": "direct|contradiction|induction|case_analysis",
+      "description": "how this strategy works",
+      "relevant_lemmas": ["Nat.add_comm", ...],
+      "plausibility": 0.7,
+      "key_tactics": ["simp", "ring", ...]
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Propose 2-3 strategies ranked by plausibility
+- Consider the structure of the statement (universal quantifiers suggest induction, \
+disjunctions suggest case analysis, negations suggest contradiction)
+- Reference specific Mathlib lemmas found in the search results
+- Be realistic about plausibility — don't rate everything high
+"""
+
+PROOF_STRATEGY_USER_TEMPLATE = """\
+## Theorem Statement (Lean 4)
+```lean
+{statement}
+```
+
+## Relevant Mathlib Lemmas
+{mathlib_lemmas}
+
+Propose 2-3 proof strategies. Return as JSON.
+"""
+
+PROOF_ATTEMPT_WITH_STRATEGY_TEMPLATE = """\
+Prove the following Lean 4 theorem using the specified strategy.
+
+## Theorem Statement
+```lean
+{statement}
+```
+
+## Strategy
+Type: {strategy_type}
+Description: {strategy_description}
+Recommended tactics: {key_tactics}
+Relevant lemmas: {relevant_lemmas}
+
+Provide the complete proof (the full theorem with its proof) inside a ```lean code block.
+"""
+
+LEMMA_BREAKDOWN_SYSTEM = """\
+You are an expert mathematician. Given a theorem that is too complex to prove \
+directly, decompose it into simpler sub-lemmas.
+
+## Requirements
+- Each sub-lemma should be independently provable
+- Sub-lemmas should compose to prove the parent theorem
+- Order sub-lemmas topologically (dependencies first)
+- Assign stable identifiers (lemma_1, lemma_2, etc.)
+- Tag lemmas that are likely already known in the literature
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "lemmas": [
+    {{
+      "node_id": "lemma_1",
+      "statement_nl": "natural language statement",
+      "depends_on": [],
+      "from_prior_work": false
+    }}
+  ],
+  "topological_order": ["lemma_1", "lemma_2", ...]
+}}
+```
+
+## Guidelines
+- Aim for 2-5 sub-lemmas
+- Each sub-lemma should be simpler than the original
+- Tag well-known results (e.g., commutativity, triangle inequality) as from_prior_work
+- The topological order should list dependencies before dependents
+"""
+
+LEMMA_BREAKDOWN_USER_TEMPLATE = """\
+## Theorem to Decompose
+Statement (NL): {statement_nl}
+Statement (Lean 4):
+```lean
+{statement_lean}
+```
+
+## Failed Direct Proof Attempts
+{failed_attempts}
+
+Decompose this theorem into simpler sub-lemmas. Return as JSON.
+"""
+
+LEMMA_LEANIFY_SYSTEM = """\
+You are an expert Lean 4 programmer. Translate a natural language lemma \
+into a Lean 4 theorem statement with `sorry` as the proof body.
+
+## Guidelines
+- The statement must type-check in Lean 4 with Mathlib
+- Use `theorem` keyword
+- End with `:= by sorry` or `:= sorry`
+- Include all necessary imports
+- Use appropriate type annotations
+
+## Output Format
+Return ONLY the Lean 4 code inside a ```lean code block.
+"""
+
+LEMMA_LEANIFY_USER_TEMPLATE = """\
+## Lemma to Formalize
+ID: {node_id}
+Statement (NL): {statement_nl}
+
+## Context (parent theorem)
+```lean
+{parent_statement}
+```
+
+## Already Formalized Sibling Lemmas
+{sibling_statements}
+
+Write a Lean 4 theorem statement for this lemma. Use `sorry` as proof. \
+Return inside a ```lean code block.
+"""
+
+LEMMA_LEANIFY_FEEDBACK_TEMPLATE = """\
+Your previous Lean 4 lemma statement failed to compile. Fix the errors.
+
+## Lemma
+ID: {node_id}
+Statement (NL): {statement_nl}
+
+## Previous Attempt
+```lean
+{previous_attempt}
+```
+
+## Compilation Errors
+{errors}
+
+Provide a corrected statement inside a ```lean code block.
+"""
+
+PARENT_PROOF_SYSTEM = """\
+You are an expert Lean 4 theorem prover. Prove a parent theorem \
+assuming its child lemmas are true (they appear as `sorry` premises).
+
+## Key Insight
+The child lemmas are available as hypotheses. Your job is to show \
+the parent theorem follows from these lemmas, NOT to prove the lemmas \
+themselves.
+
+## Output Format
+Return ONLY the Lean 4 proof code inside a ```lean code block. \
+Include the child lemma declarations (with sorry) and the parent proof.
+"""
+
+PARENT_PROOF_USER_TEMPLATE = """\
+## Parent Theorem
+```lean
+{parent_statement}
+```
+
+## Child Lemma Declarations (assume these are true)
+{child_declarations}
+
+Prove the parent theorem using these child lemmas as premises. \
+Return inside a ```lean code block.
+"""
+
+FAILURE_DIAGNOSIS_SYSTEM = """\
+You are an expert Lean 4 debugger. Analyze why a proof attempt failed \
+and classify the failure.
+
+## Failure Types
+- missing_hypothesis: the proof needs a hypothesis not present in the statement
+- weak_child_lemma: a child lemma's statement is too weak to prove the parent
+- contradictory_child: a child lemma contradicts the proof goal or other children
+- stuck_goal: the proof is stuck on a goal that doesn't match any available tactic
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "failure_type": "missing_hypothesis|weak_child_lemma|contradictory_child|stuck_goal",
+  "description": "what went wrong",
+  "problematic_child_id": "lemma_X or null",
+  "suggested_fix": "how to fix this"
+}}
+```
+"""
+
+FAILURE_DIAGNOSIS_USER_TEMPLATE = """\
+## Parent Theorem
+```lean
+{parent_statement}
+```
+
+## Child Lemmas Used
+{child_declarations}
+
+## Failed Proof Attempt
+```lean
+{failed_proof}
+```
+
+## Compilation Errors
+{errors}
+
+Diagnose the failure. Return as JSON.
+"""
+
+CHILD_REFORMULATION_TEMPLATE = """\
+The following child lemma caused a proof failure. Reformulate it so \
+the parent theorem can be proved.
+
+## Parent Theorem
+```lean
+{parent_statement}
+```
+
+## Problematic Child Lemma
+ID: {child_id}
+Original Statement: {child_statement_nl}
+Lean: {child_statement_lean}
+
+## Failure Diagnosis
+Type: {failure_type}
+Description: {failure_description}
+Suggested Fix: {suggested_fix}
+
+Provide a reformulated natural language statement for this lemma \
+that would fix the failure. Return a JSON object:
+```json
+{{
+  "reformulated_statement": "new natural language statement",
+  "reasoning": "why this reformulation fixes the issue"
+}}
+```
+"""
+
+FLATTEN_PROOF_TEMPLATE = """\
+Assemble these individually proved lemmas into a single self-contained \
+Lean 4 proof. Remove any unused lemmas and ensure the final proof compiles.
+
+## Root Theorem
+```lean
+{root_statement}
+```
+
+## Proved Lemmas (in dependency order)
+{proved_lemmas}
+
+## Root Proof (using lemmas)
+```lean
+{root_proof}
+```
+
+Assemble into a single, self-contained Lean 4 file. Include all imports. \
+Remove lemmas that are not actually used in the final proof. \
+Return inside a ```lean code block.
+"""

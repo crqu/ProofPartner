@@ -108,3 +108,126 @@ For each conjecture, provide:
 
 Return your conjectures as a JSON array.
 """
+
+EXPLORATION_SYSTEM_PROMPT = """\
+You are a mathematical research assistant specializing in identifying \
+mathematical domains, concepts, and research directions from rough ideas.
+
+Given a rough mathematical idea, you must:
+1. Identify the primary mathematical domain(s) involved
+2. List relevant mathematical concepts with their definitions
+3. Note known results related to the idea
+4. Propose candidate research directions at varying ambition levels
+
+You have access to Mathlib search results showing existing formalizations.
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "domain": "primary mathematical domain",
+  "concepts": [
+    {{
+      "name": "concept name",
+      "description": "brief description",
+      "domain": "sub-domain",
+      "mathlib_ref": "Mathlib reference or null"
+    }}
+  ],
+  "known_results": ["statement of known result 1", ...],
+  "directions": [
+    {{
+      "title": "direction title",
+      "description": "what to investigate",
+      "ambition_level": 1-5,
+      "relevant_concepts": ["concept1", "concept2"],
+      "estimated_difficulty": 1-5
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Ambition level 1 = conservative (close to known results), 5 = ambitious (novel, less certain)
+- Difficulty 1 = likely straightforward, 5 = very hard / open-problem adjacent
+- Reference real mathematical concepts and Mathlib identifiers when possible
+- Include at least one conservative and one ambitious direction
+"""
+
+EXPLORATION_USER_TEMPLATE = """\
+## Rough Mathematical Idea
+{idea}
+
+## Mathlib Search Results
+{search_results}
+
+Analyze this idea and propose research directions. Return your analysis as JSON.
+"""
+
+CONJECTURE_SYSTEM_PROMPT = """\
+You are a mathematical conjecture generator. Given an exploration of a \
+mathematical domain with identified concepts and research directions, \
+generate concrete conjecture candidates.
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "conjectures": [
+    {{
+      "statement": "formal mathematical statement",
+      "natural_language": "plain English description",
+      "confidence": 0.0-1.0,
+      "difficulty": 1-5,
+      "related_results": ["related result 1", ...],
+      "novelty_score": 0.0-1.0,
+      "formalizability_score": 0.0-1.0
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Range from conservative (likely true, close to known results) to ambitious (novel, less certain)
+- Conservative conjectures: confidence > 0.7, novelty_score < 0.4
+- Ambitious conjectures: confidence < 0.5, novelty_score > 0.6
+- formalizability_score reflects how straightforward it is to express in Lean 4
+- Each conjecture should be specific enough to attempt formalization
+- Reference real mathematical concepts and known results
+"""
+
+CONJECTURE_USER_TEMPLATE = """\
+## Original Idea
+{idea}
+
+## Domain
+{domain}
+
+## Identified Concepts
+{concepts}
+
+## Known Results
+{known_results}
+
+## Research Directions
+{directions}
+
+Generate {num_conjectures} conjecture candidates ranging from conservative to ambitious.
+Return your conjectures as JSON.
+"""
+
+CONJECTURE_RANKING_PROMPT = """\
+Rank the following conjectures by a composite score combining:
+- Novelty (weight 0.3): how original is this conjecture?
+- Plausibility (weight 0.4): how likely is it to be true?
+- Formalizability (weight 0.3): how easy is it to express in Lean 4?
+
+## Conjectures
+{conjectures}
+
+Return a JSON object with a single key "ranking" containing a list of \
+0-based indices sorted from best to worst:
+```json
+{{"ranking": [2, 0, 1, ...]}}
+```
+"""

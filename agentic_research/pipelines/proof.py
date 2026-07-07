@@ -17,6 +17,7 @@ from agentic_research.agents.proof_search import ProofSearchAgent
 from agentic_research.agents.recursive_prover import RecursiveProver
 from agentic_research.logging import get_logger
 from agentic_research.models.agents import AgentContext, AgentStatus, ProverConfig, TokenUsage
+from agentic_research.models.external_prover import ExternalProverConfig
 from agentic_research.models.formalization import ClaimCheckVerdict
 from agentic_research.models.proof import (
     LemmaTree,
@@ -44,6 +45,8 @@ class ProofPipeline:
         max_depth: int = 5,
         max_retries_per_node: int = 3,
         use_claim_check: bool = True,
+        use_external_prover: bool = False,
+        external_prover_config: ExternalProverConfig | None = None,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -53,6 +56,8 @@ class ProofPipeline:
         self._max_depth = max_depth
         self._max_retries_per_node = max_retries_per_node
         self._use_claim_check = use_claim_check
+        self._use_external_prover = use_external_prover
+        self._external_prover_config = external_prover_config
         self._total_tokens = TokenUsage()
 
     def _accumulate_tokens(self, usage: TokenUsage) -> None:
@@ -64,6 +69,12 @@ class ProofPipeline:
     def run(self, lean_statement: str, statement_nl: str = "") -> ProofPipelineResult:
         """Execute the full proof pipeline."""
         log.info("proof_pipeline_start", statement_len=len(lean_statement))
+
+        if self._use_external_prover and self._external_prover_config is not None:
+            ext_result = self._run_external_prover(lean_statement)
+            if ext_result is not None:
+                return ext_result
+            log.info("external_prover_fallback_to_builtin")
 
         search_result = self._run_proof_search(lean_statement)
 
@@ -165,6 +176,36 @@ class ProofPipeline:
             final_proof=final_proof,
             search_result=search_result,
             recursive_result=recursive_result,
+            claim_check_passed=True,
+            total_token_usage=self._total_tokens,
+        )
+
+    def _run_external_prover(self, lean_statement: str) -> ProofPipelineResult | None:
+        """Try the external prover. Returns a result on success, None on failure."""
+        from agentic_research.tools.external_prover import ExternalProverClient
+
+        assert self._external_prover_config is not None
+        client = ExternalProverClient(self._external_prover_config)
+        log.info("external_prover_attempt", model=self._external_prover_config.model_name)
+
+        ext_result = client.prove(lean_statement)
+        self._accumulate_tokens(ext_result.tokens_used)
+
+        if not ext_result.success or not ext_result.proof_code:
+            log.warning("external_prover_failed", error=ext_result.error)
+            return None
+
+        if self._use_claim_check:
+            passed = self._run_claim_check(lean_statement, ext_result.proof_code)
+            if not passed:
+                log.warning("external_prover_claim_check_failed")
+                return None
+
+        log.info("external_prover_success")
+        return ProofPipelineResult(
+            statement=lean_statement,
+            proved=True,
+            final_proof=ext_result.proof_code,
             claim_check_passed=True,
             total_token_usage=self._total_tokens,
         )

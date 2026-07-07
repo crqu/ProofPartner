@@ -66,7 +66,9 @@ class ResearchOrchestrator:
 
         self._state_machine = PipelineStateMachine()
         self._memory = ResearchSessionMemory(self._session_id)
-        self._checkpoint_mgr = CheckpointManager()
+        self._checkpoint_mgr = CheckpointManager(
+            session_id=self._session_id, persist=True
+        )
         self._total_tokens = TokenUsage()
         self._stage_usages: list[StageTokenUsage] = []
         self._exploration_rounds = 0
@@ -118,6 +120,50 @@ class ResearchOrchestrator:
 
         return self._build_result(raw_idea)
 
+    def resume_from_checkpoint(self, checkpoint_id: str) -> ResearchSessionResult:
+        """Resume a session from a previously saved checkpoint.
+
+        Loads the checkpoint (from in-memory list or disk), restores state
+        machine position and session memory, then continues from the last
+        completed stage.
+        """
+        checkpoint = self._checkpoint_mgr.get_checkpoint(checkpoint_id)
+        if checkpoint is None:
+            checkpoint = CheckpointManager.load_checkpoint_from_disk(
+                self._session_id, checkpoint_id
+            )
+        if checkpoint is None:
+            log.error("resume_checkpoint_not_found", checkpoint_id=checkpoint_id)
+            return self._build_result("")
+
+        self._state_machine.restore(checkpoint.session_state.model_copy(deep=True))
+        self._memory._data = checkpoint.memory.model_copy(deep=True)
+        self._stage_usages = list(checkpoint.stage_token_usages)
+
+        raw_idea = checkpoint.session_state.raw_idea
+        log.info(
+            "orchestrator_resumed",
+            checkpoint_id=checkpoint_id,
+            stage=checkpoint.stage.value,
+            raw_idea_len=len(raw_idea),
+        )
+
+        try:
+            self._run_loop(raw_idea)
+        except Exception as exc:
+            log.error("orchestrator_error_after_resume", error=str(exc))
+            if not self._state_machine.is_terminal:
+                self._state_machine.transition(
+                    PipelineStage.FAILED, reason=f"Unhandled error after resume: {exc}"
+                )
+
+        return self._build_result(raw_idea)
+
+    def _checkpoint_current_stage(self) -> None:
+        self._checkpoint_mgr.create_checkpoint(
+            self._state_machine, self._memory, self._stage_usages
+        )
+
     def _run_loop(self, raw_idea: str) -> None:
         while not self._state_machine.is_terminal:
             if self._budget_exceeded():
@@ -125,6 +171,7 @@ class ResearchOrchestrator:
                 self._state_machine.transition(
                     PipelineStage.FAILED, reason="Budget limit exceeded"
                 )
+                self._checkpoint_current_stage()
                 break
 
             if self._reasoning_cycles >= self._config.max_reasoning_cycles:
@@ -137,6 +184,7 @@ class ResearchOrchestrator:
                     PipelineStage.FAILED,
                     reason=f"Max reasoning cycles ({self._config.max_reasoning_cycles}) reached",
                 )
+                self._checkpoint_current_stage()
                 break
 
             if self._circuit_breaker.is_open():
@@ -144,10 +192,13 @@ class ResearchOrchestrator:
                 self._state_machine.transition(
                     PipelineStage.FAILED, reason="Circuit breaker open — too many failures"
                 )
+                self._checkpoint_current_stage()
                 break
 
             self._reasoning_cycles += 1
             stage = self._state_machine.current_stage
+
+            self._checkpoint_current_stage()
 
             if stage == PipelineStage.EXPLORING:
                 self._handle_exploring(raw_idea)
@@ -172,10 +223,6 @@ class ResearchOrchestrator:
                 reason=f"Max exploration rounds ({self._config.max_exploration_rounds}) reached",
             )
             return
-
-        self._checkpoint_mgr.create_checkpoint(
-            self._state_machine, self._memory, self._stage_usages
-        )
 
         log.info("orchestrator_exploring", round=self._exploration_rounds)
         explorer = ExplorationAgent(
@@ -271,10 +318,6 @@ class ResearchOrchestrator:
     def _handle_formalizing(self, raw_idea: str) -> None:
         conj = self._active_conjecture
         log.info("orchestrator_formalizing", conjecture=conj.statement[:60])
-
-        self._checkpoint_mgr.create_checkpoint(
-            self._state_machine, self._memory, self._stage_usages
-        )
 
         pipeline = FormalizationPipeline(
             llm_client=self._llm, lean_repl=self._repl, lean_search=self._search

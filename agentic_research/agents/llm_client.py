@@ -3,6 +3,9 @@
 Supports Claude Opus 4.6 with extended thinking, prompt caching,
 structured output extraction, and token usage tracking.
 
+Backends: direct Anthropic API (ANTHROPIC_API_KEY) or Google Cloud
+Vertex AI (CLAUDE_CODE_USE_VERTEX / ANTHROPIC_VERTEX_PROJECT_ID).
+
 Feature flag OPENAI_ENABLED gates optional GPT integration (disabled by default).
 """
 
@@ -21,7 +24,20 @@ from agentic_research.models.agents import LLMResponse, TokenUsage
 log = get_logger(__name__)
 
 DEFAULT_MODEL = "claude-opus-4-6-20250616"
+DEFAULT_VERTEX_REGION = "us-east5"
 OPENAI_ENABLED = os.environ.get("OPENAI_ENABLED", "false").lower() in ("true", "1", "yes")
+
+
+def _normalize_model_for_vertex(model: str) -> str:
+    """Convert a direct-API model ID to Vertex AI format.
+
+    Direct API:  claude-opus-4-20250514
+    Vertex AI:   claude-opus-4@20250514  (@ replaces the last hyphen before the date)
+    """
+    match = re.match(r"^(claude-.+)-(\d{8})$", model)
+    if match:
+        return f"{match.group(1)}@{match.group(2)}"
+    return model
 
 
 class LLMClientError(Exception):
@@ -45,27 +61,50 @@ class LLMClient:
         backoff_base: float = 1.0,
         backoff_max: float = 30.0,
     ) -> None:
-        self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
-
-        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not resolved_key:
-            raise LLMClientError(
-                "ANTHROPIC_API_KEY environment variable is not set. "
-                "Set it or pass api_key to LLMClient."
-            )
+        self._is_vertex = False
 
         import anthropic
-        self._client = anthropic.Anthropic(api_key=resolved_key)
-        log.info("llm_client_init", model=model)
+
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        vertex_project = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
+        use_vertex_flag = os.environ.get("CLAUDE_CODE_USE_VERTEX", "0") == "1"
+
+        if resolved_key:
+            self._model = model
+            self._client = anthropic.Anthropic(api_key=resolved_key)
+        elif use_vertex_flag or vertex_project:
+            if not vertex_project:
+                raise LLMClientError(
+                    "CLAUDE_CODE_USE_VERTEX=1 but ANTHROPIC_VERTEX_PROJECT_ID is not set."
+                )
+            region = os.environ.get("ANTHROPIC_VERTEX_REGION", DEFAULT_VERTEX_REGION)
+            self._model = _normalize_model_for_vertex(model)
+            self._client = anthropic.AnthropicVertex(
+                project_id=vertex_project,
+                region=region,
+            )
+            self._is_vertex = True
+        else:
+            raise LLMClientError(
+                "No Anthropic credentials configured. Either set ANTHROPIC_API_KEY "
+                "for direct API access, or set ANTHROPIC_VERTEX_PROJECT_ID (and "
+                "optionally CLAUDE_CODE_USE_VERTEX=1) for Vertex AI."
+            )
+
+        log.info("llm_client_init", model=self._model, vertex=self._is_vertex)
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def is_vertex(self) -> bool:
+        return self._is_vertex
 
     def complete(
         self,

@@ -192,7 +192,7 @@ class TestLLMClient:
         from agentic_research.agents.llm_client import LLMClient, LLMClientError
 
         with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(LLMClientError, match="ANTHROPIC_API_KEY"):
+            with pytest.raises(LLMClientError, match="No Anthropic credentials"):
                 LLMClient()
 
     def test_explicit_api_key(self):
@@ -201,6 +201,68 @@ class TestLLMClient:
         with patch("anthropic.Anthropic"):
             client = LLMClient(api_key="test-key-123")
             assert client.model == "claude-opus-4-6-20250616"
+            assert client.is_vertex is False
+
+    def test_vertex_via_env(self):
+        from agentic_research.agents.llm_client import LLMClient
+
+        env = {
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "ANTHROPIC_VERTEX_PROJECT_ID": "my-project",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("anthropic.AnthropicVertex") as mock_vertex:
+                client = LLMClient()
+                assert client.is_vertex is True
+                assert client.model == "claude-opus-4-6@20250616"
+                mock_vertex.assert_called_once_with(
+                    project_id="my-project", region="us-east5"
+                )
+
+    def test_vertex_custom_region(self):
+        from agentic_research.agents.llm_client import LLMClient
+
+        env = {
+            "ANTHROPIC_VERTEX_PROJECT_ID": "my-project",
+            "ANTHROPIC_VERTEX_REGION": "europe-west1",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("anthropic.AnthropicVertex") as mock_vertex:
+                client = LLMClient()
+                assert client.is_vertex is True
+                mock_vertex.assert_called_once_with(
+                    project_id="my-project", region="europe-west1"
+                )
+
+    def test_vertex_flag_without_project_raises(self):
+        from agentic_research.agents.llm_client import LLMClient, LLMClientError
+
+        env = {"CLAUDE_CODE_USE_VERTEX": "1"}
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(LLMClientError, match="ANTHROPIC_VERTEX_PROJECT_ID"):
+                LLMClient()
+
+    def test_api_key_takes_precedence_over_vertex(self):
+        from agentic_research.agents.llm_client import LLMClient
+
+        env = {
+            "ANTHROPIC_API_KEY": "sk-test",
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "ANTHROPIC_VERTEX_PROJECT_ID": "my-project",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("anthropic.Anthropic"):
+                client = LLMClient()
+                assert client.is_vertex is False
+
+    def test_normalize_model_for_vertex(self):
+        from agentic_research.agents.llm_client import _normalize_model_for_vertex
+
+        assert _normalize_model_for_vertex("claude-opus-4-20250514") == "claude-opus-4@20250514"
+        assert _normalize_model_for_vertex("claude-opus-4-6-20250616") == "claude-opus-4-6@20250616"
+        assert _normalize_model_for_vertex("claude-sonnet-4-20250514") == "claude-sonnet-4@20250514"
+        assert _normalize_model_for_vertex("custom-model") == "custom-model"
+        assert _normalize_model_for_vertex("claude-opus-4@20250514") == "claude-opus-4@20250514"
 
     def test_complete_basic(self):
         from agentic_research.agents.llm_client import LLMClient

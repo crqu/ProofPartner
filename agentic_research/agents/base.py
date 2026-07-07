@@ -23,6 +23,14 @@ log = get_logger(__name__)
 class BaseAgent(ABC):
     """Abstract base for all agents in the pipeline."""
 
+    # Caching strategy: system prompts and tool definitions are cache-eligible
+    # in the Anthropic API. cache_prefix returns the stable portion of the
+    # system prompt — everything except timestamps, session IDs, and
+    # per-request context. This prefix should be placed first in the system
+    # message so the API can cache it across calls. Callers append dynamic
+    # content (session state, conjecture context) AFTER the cached prefix.
+    SYSTEM_PROMPT: str = ""
+
     def __init__(self, name: str, max_retries: int = 3) -> None:
         self._name = name
         self._max_retries = max_retries
@@ -39,6 +47,16 @@ class BaseAgent(ABC):
     @property
     def cumulative_tokens(self) -> TokenUsage:
         return self._cumulative_tokens
+
+    @property
+    def cache_prefix(self) -> str:
+        """Return the stable portion of the system prompt for API-level caching.
+
+        Subclasses that define SYSTEM_PROMPT get caching for free. The prefix
+        excludes timestamps and session IDs so it remains identical across
+        calls, enabling prompt-cache hits (90% cost reduction when reused >2.3x).
+        """
+        return self.SYSTEM_PROMPT
 
     def _accumulate_tokens(self, usage: TokenUsage) -> None:
         self._cumulative_tokens.input_tokens += usage.input_tokens

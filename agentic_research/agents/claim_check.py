@@ -3,13 +3,10 @@ weakened the original statement.
 
 Checks:
   1. Byte-for-byte statement preservation
-  2. Import cycle rejection
-  3. Semantic fidelity via LLM (optional)
+  2. Semantic fidelity via LLM (optional)
 """
 
 from __future__ import annotations
-
-import re
 
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
@@ -27,24 +24,6 @@ from agentic_research.models.agents import (
 from agentic_research.models.formalization import ClaimCheckResult, ClaimCheckVerdict
 
 log = get_logger(__name__)
-
-_IMPORT_PATTERN = re.compile(r"^import\s+(\S+)", re.MULTILINE)
-
-
-def detect_import_cycles(code: str) -> bool:
-    """Check if the Lean code has circular import patterns.
-
-    Looks for a module importing itself or mutual imports within the
-    provided code block (a heuristic check — full cycle detection
-    requires the module graph).
-    """
-    imports = _IMPORT_PATTERN.findall(code)
-    seen: set[str] = set()
-    for imp in imports:
-        if imp in seen:
-            return True
-        seen.add(imp)
-    return False
 
 
 def check_statement_preserved(
@@ -77,24 +56,6 @@ class ClaimCheck(BaseAgent):
 
         log.info("claim_check_start", conjecture_len=len(conjecture_nl))
 
-        full_code = f"{type_definitions}\n\n{lean_code}" if type_definitions else lean_code
-        has_cycle = detect_import_cycles(full_code)
-
-        if has_cycle:
-            result = ClaimCheckResult(
-                verdict=ClaimCheckVerdict.FAIL,
-                original_statement=conjecture_nl,
-                formalized_statement=lean_code,
-                reason="Import cycle detected in formalization",
-                has_import_cycle=True,
-                statement_preserved=False,
-            )
-            return AgentResult(
-                agent_name=self.name,
-                status=AgentStatus.SUCCESS,
-                result=result.model_dump(),
-            )
-
         if self._use_llm_check:
             result, token_usage = self._llm_check(conjecture_nl, lean_code, type_definitions)
         else:
@@ -103,7 +64,6 @@ class ClaimCheck(BaseAgent):
                 original_statement=conjecture_nl,
                 formalized_statement=lean_code,
                 reason="Structural checks passed (LLM check disabled)",
-                has_import_cycle=False,
                 statement_preserved=True,
             )
             token_usage = None
@@ -111,7 +71,6 @@ class ClaimCheck(BaseAgent):
         log.info(
             "claim_check_done",
             verdict=result.verdict.value,
-            has_cycle=result.has_import_cycle,
         )
 
         return AgentResult(
@@ -154,7 +113,6 @@ class ClaimCheck(BaseAgent):
                 original_statement=conjecture_nl,
                 formalized_statement=lean_code,
                 reason=parsed.get("reason", ""),
-                has_import_cycle=parsed.get("has_import_cycle", False),
                 statement_preserved=parsed.get("statement_preserved", True),
             ), response.token_usage
 

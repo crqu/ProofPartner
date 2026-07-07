@@ -6,6 +6,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from agentic_research.models.agents import TokenUsage
+
 
 class TypeCandidate(BaseModel):
     """A type that needs to be formalized in Lean 4."""
@@ -159,7 +161,6 @@ class ClaimCheckResult(BaseModel):
     original_statement: str = ""
     formalized_statement: str = ""
     reason: str = Field(default="", description="Explanation of pass/fail")
-    has_import_cycle: bool = False
     statement_preserved: bool = True
 
 
@@ -174,3 +175,4 @@ class FormalizationPipelineResult(BaseModel):
     retry_count: int = 0
     failure_stage: str | None = None
     failure_reason: str | None = None
+    total_token_usage: TokenUsage = Field(default_factory=TokenUsage)

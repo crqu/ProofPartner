@@ -460,7 +460,6 @@ Check for:
 2. Silent strengthening (making the statement harder than intended)
 3. Missing quantifiers or conditions
 4. Type mismatches between the informal and formal versions
-5. Import cycles in the type definitions
 
 ## Output Format
 Return a JSON object:
@@ -468,7 +467,6 @@ Return a JSON object:
 {{
   "verdict": "pass" or "fail",
   "reason": "explanation",
-  "has_import_cycle": false,
   "statement_preserved": true
 }}
 ```

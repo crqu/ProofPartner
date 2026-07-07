@@ -181,7 +181,6 @@ class TestClaimCheckResult:
             reason="Faithful",
         )
         assert r.verdict == ClaimCheckVerdict.PASS
-        assert r.has_import_cycle is False
 
     def test_fail(self):
         r = ClaimCheckResult(
@@ -277,14 +276,12 @@ MOCK_THEOREM_LEAN = "```lean\ntheorem main_conjecture : True := sorry\n```"
 MOCK_CLAIM_CHECK_PASS = json.dumps({
     "verdict": "pass",
     "reason": "Formalization faithfully captures the conjecture",
-    "has_import_cycle": False,
     "statement_preserved": True,
 })
 
 MOCK_CLAIM_CHECK_FAIL = json.dumps({
     "verdict": "fail",
     "reason": "The formalization silently weakened the statement",
-    "has_import_cycle": False,
     "statement_preserved": False,
 })
 
@@ -813,10 +810,10 @@ class TestClaimCheck:
         claim = ClaimCheckResult.model_validate(result.result)
         assert claim.verdict == ClaimCheckVerdict.FAIL
 
-    def test_import_cycle_detection(self):
+    def test_duplicate_imports_do_not_cause_failure(self):
         from agentic_research.agents.claim_check import ClaimCheck
 
-        llm = _make_mock_llm([])
+        llm = _make_mock_llm([MOCK_CLAIM_CHECK_PASS])
 
         checker = ClaimCheck(llm_client=llm)
         ctx = AgentContext(
@@ -829,8 +826,7 @@ class TestClaimCheck:
 
         result = checker.run(ctx)
         claim = ClaimCheckResult.model_validate(result.result)
-        assert claim.verdict == ClaimCheckVerdict.FAIL
-        assert claim.has_import_cycle
+        assert claim.verdict == ClaimCheckVerdict.PASS
 
     def test_without_llm_check(self):
         from agentic_research.agents.claim_check import ClaimCheck
@@ -857,26 +853,6 @@ class TestClaimCheck:
         llm = _make_mock_llm([])
         checker = ClaimCheck(llm_client=llm)
         assert checker.name == "claim_check"
-
-
-class TestImportCycleDetection:
-    def test_no_cycle(self):
-        from agentic_research.agents.claim_check import detect_import_cycles
-
-        code = "import Mathlib.Data.Nat.Basic\nimport Mathlib.Tactic\ntheorem t := sorry"
-        assert not detect_import_cycles(code)
-
-    def test_duplicate_import(self):
-        from agentic_research.agents.claim_check import detect_import_cycles
-
-        code = "import Foo\nimport Bar\nimport Foo"
-        assert detect_import_cycles(code)
-
-    def test_no_imports(self):
-        from agentic_research.agents.claim_check import detect_import_cycles
-
-        code = "theorem t : True := trivial"
-        assert not detect_import_cycles(code)
 
 
 class TestStatementPreserved:

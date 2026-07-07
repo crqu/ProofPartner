@@ -15,7 +15,7 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.theorem_formalizer import TheoremFormalizer
 from agentic_research.agents.type_planner import TypePlanner
 from agentic_research.logging import get_logger
-from agentic_research.models.agents import AgentContext, AgentStatus
+from agentic_research.models.agents import AgentContext, AgentStatus, TokenUsage
 from agentic_research.models.formalization import (
     AuctionResult,
     AuctionVerdict,
@@ -58,6 +58,13 @@ class FormalizationPipeline:
         self._k = k
         self._max_retries = max_retries
         self._prover_config = prover_config
+        self._total_tokens = TokenUsage()
+
+    def _accumulate_tokens(self, usage: TokenUsage) -> None:
+        self._total_tokens.input_tokens += usage.input_tokens
+        self._total_tokens.output_tokens += usage.output_tokens
+        self._total_tokens.cache_creation_input_tokens += usage.cache_creation_input_tokens
+        self._total_tokens.cache_read_input_tokens += usage.cache_read_input_tokens
 
     def run(self, conjecture_nl: str) -> FormalizationPipelineResult:
         """Execute the full formalization pipeline."""
@@ -70,6 +77,7 @@ class FormalizationPipeline:
                 conjecture_nl=conjecture_nl,
                 failure_stage="type_planning",
                 failure_reason="Type planner failed",
+                total_token_usage=self._total_tokens,
             )
 
         # Stage 2: Lemma Planning
@@ -83,6 +91,7 @@ class FormalizationPipeline:
                 type_formalization=type_result,
                 failure_stage="type_formalization",
                 failure_reason="Not all types could be formalized",
+                total_token_usage=self._total_tokens,
             )
 
         # Stage 5: Theorem Formalization
@@ -97,6 +106,7 @@ class FormalizationPipeline:
                 theorem=theorem,
                 failure_stage="theorem_formalization",
                 failure_reason=theorem.failure_reason if theorem else "Theorem formalizer failed",
+                total_token_usage=self._total_tokens,
             )
 
         # Stage 6: Claim Check
@@ -109,6 +119,7 @@ class FormalizationPipeline:
                 claim_check=claim_result,
                 failure_stage="claim_check",
                 failure_reason=claim_result.reason,
+                total_token_usage=self._total_tokens,
             )
 
         log.info("formalization_pipeline_success")
@@ -118,12 +129,14 @@ class FormalizationPipeline:
             theorem=theorem,
             claim_check=claim_result,
             success=True,
+            total_token_usage=self._total_tokens,
         )
 
     def _run_type_planner(self, conjecture_nl: str) -> TypePlan | None:
         planner = TypePlanner(llm_client=self._llm, lean_search=self._search)
         ctx = AgentContext(task=conjecture_nl)
         result = planner.run(ctx)
+        self._accumulate_tokens(planner.cumulative_tokens)
         if result.status != AgentStatus.SUCCESS or not result.result:
             return None
         return TypePlan.model_validate(result.result)
@@ -135,6 +148,7 @@ class FormalizationPipeline:
             metadata={"type_plan": type_plan.model_dump()},
         )
         result = planner.run(ctx)
+        self._accumulate_tokens(planner.cumulative_tokens)
         if result.status != AgentStatus.SUCCESS or not result.result:
             return {}
 
@@ -223,6 +237,7 @@ class FormalizationPipeline:
             )
 
             result = auctioneer.run(ctx)
+            self._accumulate_tokens(auctioneer.cumulative_tokens)
             if not result.result:
                 continue
 
@@ -254,6 +269,7 @@ class FormalizationPipeline:
             metadata={"type_definitions": type_definitions},
         )
         result = formalizer.run(ctx)
+        self._accumulate_tokens(formalizer.cumulative_tokens)
         if not result.result:
             return None
         return TheoremFormalization.model_validate(result.result)
@@ -270,6 +286,7 @@ class FormalizationPipeline:
             },
         )
         result = checker.run(ctx)
+        self._accumulate_tokens(checker.cumulative_tokens)
         if not result.result:
             return None
         return ClaimCheckResult.model_validate(result.result)

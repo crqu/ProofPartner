@@ -285,8 +285,13 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float) -> None:
     with console.status(f"{_cost_display(cost_tracker, budget)} Formalizing: {conjecture[:60]}...") as status:
         form_result = pipeline.run(conjecture_nl=conjecture)
 
-        estimated_tokens = 2000
-        cost_tracker.record_usage(input_tokens=estimated_tokens, output_tokens=estimated_tokens // 2)
+        tokens = form_result.total_token_usage
+        cost_tracker.record_usage(
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
+            cache_read_tokens=tokens.cache_read_input_tokens,
+            cache_write_tokens=tokens.cache_creation_input_tokens,
+        )
         status.update(f"{_cost_display(cost_tracker, budget)} Formalization complete, checking intent...")
 
         if not form_result.success or form_result.theorem is None:
@@ -405,8 +410,13 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
         result = pipeline.run(lean_statement=lean_statement)
 
         elapsed = time.monotonic() - start_time
-        estimated_tokens = 5000
-        cost_tracker.record_usage(input_tokens=estimated_tokens, output_tokens=estimated_tokens // 2)
+        tokens = result.total_token_usage
+        cost_tracker.record_usage(
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
+            cache_read_tokens=tokens.cache_read_input_tokens,
+            cache_write_tokens=tokens.cache_creation_input_tokens,
+        )
         status.update(f"{_cost_display(cost_tracker, budget)} Proof search complete ({elapsed:.1f}s)")
 
     if _check_budget(cost_tracker, budget):

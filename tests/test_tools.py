@@ -131,6 +131,69 @@ def test_repl_subprocess_error():
     assert result.compilation_status == CompilationStatus.ERROR
 
 
+@pytest.mark.skipif(not LEAN_AVAILABLE, reason="Lean 4 not installed")
+def test_repl_subprocess_unicode():
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
+    result = repl.execute("theorem ℕ_test : ∀ n : Nat, n = n := fun n => rfl")
+    assert isinstance(result, CompilationResult)
+    assert result.compilation_status == CompilationStatus.OK
+
+
+@pytest.mark.skipif(not LEAN_AVAILABLE, reason="Lean 4 not installed")
+def test_repl_subprocess_sorry():
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
+    result = repl.execute("theorem test : True := by sorry")
+    assert isinstance(result, CompilationResult)
+    assert result.compilation_status == CompilationStatus.OK
+
+
+@pytest.mark.skipif(not LEAN_AVAILABLE, reason="Lean 4 not installed")
+def test_repl_subprocess_multiline():
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
+    code = "\n".join([
+        "theorem zero_add_test : ∀ (n : Nat), 0 + n = n := by",
+        "  intro n",
+        "  simp",
+    ])
+    result = repl.execute(code)
+    assert isinstance(result, CompilationResult)
+    assert result.compilation_status == CompilationStatus.OK
+
+
+@pytest.mark.skipif(not LEAN_AVAILABLE, reason="Lean 4 not installed")
+def test_repl_subprocess_syntax_error():
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
+    result = repl.execute("theorem test : True := garbage#$%")
+    assert isinstance(result, CompilationResult)
+    assert result.compilation_status == CompilationStatus.ERROR
+    assert len(result.errors) > 0
+
+
+@pytest.mark.skipif(not LEAN_AVAILABLE, reason="Lean 4 not installed")
+def test_repl_subprocess_multiple_theorems():
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
+    code = "\n".join([
+        "theorem t1 : True := trivial",
+        "theorem t2 : 1 + 1 = 2 := rfl",
+    ])
+    result = repl.execute(code)
+    assert isinstance(result, CompilationResult)
+    assert result.compilation_status == CompilationStatus.OK
+
+
+@pytest.mark.skipif(not LEAN_AVAILABLE, reason="Lean 4 not installed")
+def test_repl_subprocess_comments():
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
+    code = "\n".join([
+        "-- This is a line comment",
+        "/- This is a block comment -/",
+        "theorem commented : True := trivial",
+    ])
+    result = repl.execute(code)
+    assert isinstance(result, CompilationResult)
+    assert result.compilation_status == CompilationStatus.OK
+
+
 # ---------------------------------------------------------------------------
 # lean_repl.py — LeanDojo backend
 # ---------------------------------------------------------------------------

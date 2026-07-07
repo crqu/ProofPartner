@@ -17,7 +17,6 @@ from agentic_research.models.agents import (
     AgentContext,
     AgentResult,
     AgentStatus,
-    TokenUsage,
 )
 from agentic_research.models.proof import LemmaTree, NodeStatus, ProofNode
 
@@ -98,7 +97,7 @@ class LemmaBreakdown(BaseAgent):
                     status=NodeStatus.PENDING,
                     from_prior_work=item.get("from_prior_work", False),
                 )
-                dep_ids = item.get("depends_on", [])
+                item.get("depends_on", [])
                 child_node.children = []
                 nodes[node_id] = child_node
                 child_ids.append(node_id)

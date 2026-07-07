@@ -1,7 +1,6 @@
 """Tests for the Pydantic eval models."""
 
 from agentic_research.models.eval import (
-    AggregateStats,
     BenchmarkSource,
     ConjectureScore,
     EvalConfig,

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from agentic_research.models.agents import (
     AgentContext,
@@ -31,7 +30,6 @@ from agentic_research.models.formalization import (
     TypeCandidate,
     TypeDependencyGraph,
     TypeFormalizationCandidate,
-    TypeFormalizationResult,
     TypePlan,
 )
 
@@ -381,7 +379,7 @@ class TestLemmaPlanner:
         result = planner.run(ctx)
 
         assert result.status == AgentStatus.SUCCESS
-        lemmas = [LemmaStatement.model_validate(l) for l in result.result["lemmas"]]
+        lemmas = [LemmaStatement.model_validate(lem) for lem in result.result["lemmas"]]
         assert len(lemmas) == 2
         assert lemmas[0].for_type == "QuasiRandomGraph"
 

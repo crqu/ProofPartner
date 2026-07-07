@@ -11,14 +11,11 @@ from __future__ import annotations
 import re
 
 from agentic_research.agents.base import BaseAgent
-from agentic_research.agents.lemma_breakdown import LemmaBreakdown
-from agentic_research.agents.lemma_leanifier import LemmaLeanifier
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
     CHILD_REFORMULATION_TEMPLATE,
     FAILURE_DIAGNOSIS_SYSTEM,
     FAILURE_DIAGNOSIS_USER_TEMPLATE,
-    LEAN4_PROVER_SYSTEM,
     PARENT_PROOF_SYSTEM,
     PARENT_PROOF_USER_TEMPLATE,
 )

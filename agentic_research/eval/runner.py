@@ -165,7 +165,6 @@ def run_eval(config: EvalConfig) -> ScoreReport:
 
 def main() -> None:
     """CLI entry point for the eval runner."""
-    import json
     import sys
 
     import click

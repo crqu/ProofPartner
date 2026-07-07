@@ -5,7 +5,6 @@ All LLM calls are mocked — no real API calls are made.
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,34 +13,21 @@ import pytest
 
 from agentic_research.memory.session import ResearchSessionMemory
 from agentic_research.models.agents import (
-    AgentContext,
-    AgentResult,
-    AgentStatus,
     LLMResponse,
     TokenUsage,
-)
-from agentic_research.models.refinement import (
-    RefinementHistory,
-    RefinementOutcome,
-    RefinementResult,
-    RefinementStatus,
 )
 from agentic_research.models.research import Conjecture, ConjectureSet, ExplorationResult
 from agentic_research.models.session import (
     ConjectureOutcome,
     CostEstimate,
     OrchestratorConfig,
-    PartialResult,
     PipelineStage,
-    PromisingDirection,
     ResearchSessionResult,
-    SessionCheckpoint,
     SessionMemoryData,
     SessionState,
     StageTokenUsage,
     StateTransition,
     TriedConjecture,
-    UserPreference,
     VALID_TRANSITIONS,
     TERMINAL_STAGES,
     compute_cost,
@@ -644,17 +630,6 @@ class TestOrchestratorHappyPath:
 
     def test_full_loop_proof_found(self):
         from agentic_research.orchestrator.engine import ResearchOrchestrator
-        from agentic_research.models.formalization import (
-            FormalizationPipelineResult,
-            TheoremFormalization,
-        )
-        from agentic_research.models.proof import ProofPipelineResult
-        from agentic_research.models.verification import (
-            CounterexampleResult,
-            CounterexampleStatus,
-            IntentVerdict,
-            IntentVerdictType,
-        )
 
         llm = _make_mock_llm()
         repl = _make_mock_repl()
@@ -673,7 +648,7 @@ class TestOrchestratorHappyPath:
             patch.object(
                 orch, "_handle_exploring",
                 wraps=lambda raw_idea: _mock_exploring(orch, raw_idea),
-            ) as mock_explore,
+            ) as _,
             patch.object(
                 orch, "_handle_conjecturing",
                 wraps=lambda raw_idea: _mock_conjecturing(orch, raw_idea),

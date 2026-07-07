@@ -9,14 +9,11 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from agentic_research.models.agents import (
     AgentContext,
-    AgentResult,
     AgentStatus,
     LLMResponse,
-    ProverConfig,
     TokenUsage,
 )
 from agentic_research.models.refinement import (

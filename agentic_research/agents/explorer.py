@@ -15,7 +15,6 @@ from agentic_research.models.agents import (
     AgentContext,
     AgentResult,
     AgentStatus,
-    TokenUsage,
 )
 from agentic_research.models.research import (
     Concept,

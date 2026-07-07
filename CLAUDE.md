@@ -1,34 +1,55 @@
-# Agentic Research Partner
+# Agentic Mathematical Research Partner
 
-## Project Overview
+## Quick Start
 
-An interactive agentic tool that transforms rough mathematical ideas into formal Lean 4 conjectures and discovers proofs through an explore-conjecture-prove loop.
-
-## Tech Stack
-
-- Python 3.11+, pydantic v2, structlog, click, rich
-- Lean 4 + Mathlib (via LeanDojo in later phases)
-- Claude Opus 4.6 via Anthropic API
+```bash
+pip install -e ".[dev]"
+```
 
 ## Commands
 
 ```bash
-# Install
-pip install -e ".[dev]"
+# Tests
+pytest tests/ -v
 
-# Run tests
-pytest
+# Lint
+ruff check agentic_research/ tests/
 
-# Run eval harness
-python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid
+# Type check (if mypy installed)
+mypy agentic_research/
 
 # CLI
-agentic-research eval miniF2F --mode proof_discovery --split valid --pass-k 1
+agentic-research --help
+
+# Eval harness
+python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid
 ```
 
-## Code Conventions
+## Project Structure
 
-- All logging via `structlog` — use `from agentic_research.logging import get_logger`
-- All data models via `pydantic.BaseModel` (v2)
-- Type hints on all public functions
-- Tests in `tests/` mirroring source structure
+```
+agentic_research/
+├── agents/           # LLM-powered agents (explorer, conjecturer, prover, intent judge, etc.)
+│   ├── base.py       # BaseAgent with retry logic and token tracking
+│   ├── llm_client.py # Anthropic API wrapper
+│   └── ...           # 20 specialized agents
+├── cli/              # Click-based CLI entry point
+├── eval/             # Benchmark evaluation harness (miniF2F, PutnamBench)
+├── memory/           # Research session memory (conjectures, directions, preferences)
+├── models/           # Pydantic data models (agents, formalization, proof, session, etc.)
+├── orchestrator/     # State machine engine, checkpointing, rollback
+│   ├── engine.py     # ResearchOrchestrator — main loop with 8 stages
+│   ├── state.py      # ResearchStage enum and transitions
+│   └── rollback.py   # CheckpointManager for session recovery
+├── pipelines/        # Multi-agent pipelines (formalization, proof, refinement)
+└── tools/            # Lean 4 integration (REPL, search, lookup)
+tests/                # 13 test files, 359+ tests
+```
+
+## Coding Conventions
+
+- **Data models**: Pydantic `BaseModel` (v2) at all boundaries
+- **Logging**: `structlog` via `from agentic_research.logging import get_logger`
+- **Type hints**: Required on all public functions
+- **Tests**: Mock Lean backends and LLM clients — real Lean 4 requires `@pytest.mark.lean_required`
+- **Imports**: Use absolute imports from `agentic_research`

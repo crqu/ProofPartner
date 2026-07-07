@@ -1,15 +1,25 @@
-# Factory Configuration — Agentic Research Partner
+# Factory Configuration — Agentic Mathematical Research Partner
+
+## Project
+
+- **Name**: Agentic Mathematical Research Partner
+- **Description**: Interactive agentic tool for math research using Lean 4 — transforms rough mathematical ideas into formal Lean 4 conjectures and discovers proofs through an explore-conjecture-prove loop
+- **Language**: Python 3.11+
+- **Framework**: Custom orchestrator (state machine)
+- **Target branch**: master
 
 ## Eval Dimensions
 
-- **proof_discovery_rate**: Fraction of benchmark problems (miniF2F/PutnamBench) where a valid Lean 4 proof is found within the attempt budget. Primary capability metric.
-- **conjecture_quality**: Composite score of generated conjectures: formalizability (can it be expressed in Lean?), non-triviality (is it non-obvious?), relevance (does it capture the original idea?). Range 0-1.
-- **compilation_rate**: Fraction of generated Lean 4 code that compiles successfully. Tracks the main bottleneck: writing valid Lean.
+- **tests**: Unit and integration test pass rate (`pytest tests/ -v`)
+- **lint**: Code style and static analysis (`ruff check agentic_research/ tests/`)
+- **type_check**: Type safety verification (`mypy agentic_research/`)
+- **capability_surface**: Fraction of core pipeline stages implemented and functional
+- **observability**: Structured logging coverage and cost tracking instrumentation
 
 ## Eval Command
 
 ```bash
-python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid --pass-k 1
+pytest tests/ -v
 ```
 
 ## Mutable Surfaces

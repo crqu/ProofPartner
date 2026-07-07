@@ -83,7 +83,7 @@ class TypeFormalizationCandidate(BaseModel):
 
     @property
     def proved_count(self) -> int:
-        return sum(1 for l in self.auxiliary_lemmas if l.proved)
+        return sum(1 for lem in self.auxiliary_lemmas if lem.proved)
 
     @property
     def total_lemma_count(self) -> int:

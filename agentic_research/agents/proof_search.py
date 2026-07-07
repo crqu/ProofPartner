@@ -15,8 +15,6 @@ import re
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
-    LEAN4_PROVER_SYSTEM,
-    PROOF_ATTEMPT_WITH_STRATEGY_TEMPLATE,
     PROOF_STRATEGY_SYSTEM,
     PROOF_STRATEGY_USER_TEMPLATE,
 )
@@ -90,7 +88,7 @@ class ProofSearchAgent(BaseAgent):
                     proved=True,
                     proof_code=prover_result.final_proof,
                     strategies_tried=strategies[: strategies.index(strategy) + 1],
-                    mathlib_lemmas_found=[l for l in mathlib_lemmas],
+                    mathlib_lemmas_found=[lem for lem in mathlib_lemmas],
                     iterations_used=prover_result.total_iterations,
                 )
                 return AgentResult(
@@ -105,7 +103,7 @@ class ProofSearchAgent(BaseAgent):
             proved=False,
             strategies_tried=strategies,
             needs_decomposition=True,
-            mathlib_lemmas_found=[l for l in mathlib_lemmas],
+            mathlib_lemmas_found=[lem for lem in mathlib_lemmas],
             failure_reason=f"All {len(strategies)} strategies exhausted",
         )
         return AgentResult(
@@ -131,7 +129,7 @@ class ProofSearchAgent(BaseAgent):
         """Ask the LLM to propose proof strategies."""
         log.info("proof_search_select_strategies")
 
-        lemmas_text = "\n".join(f"- {l}" for l in mathlib_lemmas) if mathlib_lemmas else "No relevant lemmas found."
+        lemmas_text = "\n".join(f"- {lem}" for lem in mathlib_lemmas) if mathlib_lemmas else "No relevant lemmas found."
         user_content = PROOF_STRATEGY_USER_TEMPLATE.format(
             statement=statement,
             mathlib_lemmas=lemmas_text,

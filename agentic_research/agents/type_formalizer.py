@@ -75,8 +75,8 @@ class TypeFormalizer(BaseAgent):
             context.metadata.get("type_candidate", {})
         )
         lemmas = [
-            LemmaStatement.model_validate(l)
-            for l in context.metadata.get("lemmas", [])
+            LemmaStatement.model_validate(lem)
+            for lem in context.metadata.get("lemmas", [])
         ]
         prior_definitions = context.metadata.get("prior_definitions", "")
 

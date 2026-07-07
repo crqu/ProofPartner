@@ -139,8 +139,8 @@ class FormalizationPipeline:
             return {}
 
         all_lemmas = [
-            LemmaStatement.model_validate(l)
-            for l in result.result.get("lemmas", [])
+            LemmaStatement.model_validate(lem)
+            for lem in result.result.get("lemmas", [])
         ]
 
         by_type: dict[str, list[LemmaStatement]] = {}
@@ -217,7 +217,7 @@ class FormalizationPipeline:
                 task=candidate.name,
                 metadata={
                     "type_candidate": candidate.model_dump(),
-                    "lemmas": [l.model_dump() for l in lemmas],
+                    "lemmas": [lem.model_dump() for lem in lemmas],
                     "prior_definitions": prior_definitions,
                 },
             )

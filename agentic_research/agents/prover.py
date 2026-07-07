@@ -21,6 +21,7 @@ from agentic_research.models.agents import (
     AgentContext,
     AgentResult,
     AgentStatus,
+    LLMResponse,
     ProofAttempt,
     ProofAttemptStatus,
     ProverConfig,
@@ -162,7 +163,6 @@ class IterativeProver(BaseAgent):
         errors: str,
         goals: str,
     ) -> "LLMResponse":
-        from agentic_research.models.agents import LLMResponse
 
         if previous_attempt is None:
             user_content = PROOF_ATTEMPT_TEMPLATE.format(statement=statement)

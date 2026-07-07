@@ -23,10 +23,9 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.logging import get_logger
 from agentic_research.memory.session import ResearchSessionMemory
 from agentic_research.models.agents import AgentContext, AgentStatus, TokenUsage
-from agentic_research.models.research import Conjecture, ConjectureSet, ExplorationResult
+from agentic_research.models.research import ConjectureSet, ExplorationResult
 from agentic_research.models.session import (
     ConjectureOutcome,
-    CostEstimate,
     OrchestratorConfig,
     PipelineStage,
     ResearchSessionResult,

@@ -97,7 +97,7 @@ class RefinementReporter(BaseAgent):
             if attempt.failure_reason:
                 part += f"- Failure reason: {attempt.failure_reason}\n"
             if attempt.proof_code:
-                part += f"- Proof found: yes\n"
+                part += "- Proof found: yes\n"
             parts.append(part)
 
         return "\n".join(parts)

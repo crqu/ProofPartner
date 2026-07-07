@@ -65,7 +65,7 @@ class LemmaPlanner(BaseAgent):
             agent_name=self.name,
             status=AgentStatus.SUCCESS,
             result={
-                "lemmas": [l.model_dump() for l in all_lemmas],
+                "lemmas": [lem.model_dump() for lem in all_lemmas],
                 "type_plan": plan.model_dump(),
             },
             token_usage=total_tokens,

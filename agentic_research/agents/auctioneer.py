@@ -6,7 +6,6 @@ compilation success.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
 
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
@@ -87,8 +86,8 @@ class Auctioneer(BaseAgent):
             context.metadata.get("type_candidate", {})
         )
         lemmas = [
-            LemmaStatement.model_validate(l)
-            for l in context.metadata.get("lemmas", [])
+            LemmaStatement.model_validate(lem)
+            for lem in context.metadata.get("lemmas", [])
         ]
         prior_definitions = context.metadata.get("prior_definitions", "")
 
@@ -115,7 +114,7 @@ class Auctioneer(BaseAgent):
         total_tokens = TokenUsage()
         for c in candidates:
             total_tokens.input_tokens += sum(
-                l.lemma.name.__len__() for l in c.auxiliary_lemmas
+                lem.lemma.name.__len__() for lem in c.auxiliary_lemmas
             ) * 0  # tokens tracked inside formalizers
 
         return AgentResult(
@@ -219,7 +218,7 @@ class Auctioneer(BaseAgent):
             task=type_candidate.name,
             metadata={
                 "type_candidate": type_candidate.model_dump(),
-                "lemmas": [l.model_dump() for l in lemmas],
+                "lemmas": [lem.model_dump() for lem in lemmas],
                 "prior_definitions": prior_definitions,
             },
         )

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from agentic_research.models.agents import LLMResponse, TokenUsage
 from agentic_research.models.verification import (

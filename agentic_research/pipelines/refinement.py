@@ -18,6 +18,7 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.refinement_reporter import RefinementReporter
 from agentic_research.logging import get_logger
 from agentic_research.models.agents import TokenUsage
+from agentic_research.models.refinement import RefinementReport
 from agentic_research.models.refinement import (
     RefinementAttempt,
     RefinementHistory,
@@ -259,7 +260,6 @@ class RefinementPipeline:
         )
 
     def _make_report(self, history: RefinementHistory) -> RefinementReport | None:
-        from agentic_research.models.refinement import RefinementReport
 
         reporter = RefinementReporter(llm_client=self._llm)
         report = reporter.generate_report(history)

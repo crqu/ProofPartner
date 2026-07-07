@@ -6,13 +6,11 @@ Lean REPL uses mock backend for deterministic testing.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from agentic_research.models.agents import (
     AgentContext,
-    AgentResult,
     AgentStatus,
     LLMResponse,
     ProverConfig,

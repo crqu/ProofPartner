@@ -20,6 +20,7 @@ from agentic_research.orchestrator.state import PipelineStateMachine
 log = get_logger(__name__)
 
 DEFAULT_CHECKPOINT_DIR = Path(".agentic_research/checkpoints")
+MAX_CHECKPOINTS = 20
 
 
 class CheckpointManager:
@@ -59,6 +60,8 @@ class CheckpointManager:
             stage_token_usages=list(stage_usages) if stage_usages else [],
         )
         self._checkpoints.append(checkpoint)
+        if len(self._checkpoints) > MAX_CHECKPOINTS:
+            self._checkpoints = self._checkpoints[-MAX_CHECKPOINTS:]
 
         if self._persist and self._session_id:
             self._save_checkpoint_to_disk(checkpoint)

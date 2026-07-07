@@ -16,6 +16,7 @@ log = get_logger(__name__)
 
 DEFAULT_VELOCITY_THRESHOLD_USD_PER_MIN = 1.0
 VELOCITY_WINDOW_SECONDS = 30.0
+MAX_RECORDS = 1000
 
 
 class CostTracker:
@@ -49,6 +50,8 @@ class CostTracker:
         now = time.monotonic()
         self._records.append((now, cost))
         self._total_cost += cost
+        if len(self._records) > MAX_RECORDS:
+            self._records = self._records[-MAX_RECORDS:]
 
         vel = self.velocity()
         if vel > self._velocity_threshold:

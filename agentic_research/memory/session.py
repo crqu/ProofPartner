@@ -33,6 +33,10 @@ HOT_TIER_SIZE = 3
 WARM_TIER_SIZE = 10
 DEFAULT_MAX_CONJECTURES = 50
 
+MAX_PARTIAL_RESULTS = 20
+MAX_PROMISING_DIRECTIONS = 10
+MAX_USER_PREFERENCES = 10
+
 
 class WarmConjecture:
     """Summary of a conjecture for the warm tier."""
@@ -293,6 +297,8 @@ class ResearchSessionMemory:
             source_conjecture=source_conjecture,
             domain=domain,
         ))
+        if len(self._data.partial_results) > MAX_PARTIAL_RESULTS:
+            self._data.partial_results = self._data.partial_results[-MAX_PARTIAL_RESULTS:]
         log.info(
             "session_memory_partial_result_added",
             total=len(self._data.partial_results),
@@ -311,12 +317,16 @@ class ResearchSessionMemory:
             source=source,
             priority=priority,
         ))
+        if len(self._data.promising_directions) > MAX_PROMISING_DIRECTIONS:
+            self._data.promising_directions = self._data.promising_directions[-MAX_PROMISING_DIRECTIONS:]
 
     def add_user_preference(self, preference: str, context: str = "") -> None:
         self._data.user_preferences.append(UserPreference(
             preference=preference,
             context=context,
         ))
+        if len(self._data.user_preferences) > MAX_USER_PREFERENCES:
+            self._data.user_preferences = self._data.user_preferences[-MAX_USER_PREFERENCES:]
 
     def has_tried(self, statement: str) -> bool:
         if self._data.has_tried(statement):

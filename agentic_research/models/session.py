@@ -60,6 +60,7 @@ VALID_TRANSITIONS: dict[PipelineStage, frozenset[PipelineStage]] = {
     }),
     PipelineStage.REFINING: frozenset({
         PipelineStage.FORMALIZING,
+        PipelineStage.CONJECTURING,
         PipelineStage.EXPLORING,
         PipelineStage.COMPLETE,
         PipelineStage.FAILED,

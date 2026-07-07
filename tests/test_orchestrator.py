@@ -126,6 +126,9 @@ class TestPipelineStage:
     def test_refining_can_go_back_to_exploring(self):
         assert PipelineStage.EXPLORING in VALID_TRANSITIONS[PipelineStage.REFINING]
 
+    def test_refining_can_go_to_conjecturing(self):
+        assert PipelineStage.CONJECTURING in VALID_TRANSITIONS[PipelineStage.REFINING]
+
 
 class TestConjectureOutcome:
     def test_values(self):

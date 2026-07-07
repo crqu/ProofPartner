@@ -1,0 +1,4 @@
+# Track only the factory config — ignore runtime state
+*
+!.gitignore
+!config.json

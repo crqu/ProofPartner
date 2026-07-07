@@ -1,0 +1,45 @@
+{
+  "goal": "",
+  "scope": [],
+  "guards": [],
+  "eval_command": "pytest tests/ -v",
+  "eval_threshold": 0.0,
+  "constraints": [],
+  "hypothesis_budget": {
+    "min_growth": 2,
+    "max_new": 2
+  },
+  "target_branch": "master",
+  "smoke_test": "",
+  "project_eval": [],
+  "eval_weights": {
+    "hygiene": 0.5,
+    "growth": 0.5,
+    "project": 0.0
+  },
+  "research_target": null,
+  "inner_loop": null,
+  "outer_loop": null,
+  "mutable_surfaces": [
+    "`agentic_research/` \u2014 all source code",
+    "`tests/` \u2014 test suite",
+    "`pyproject.toml` \u2014 project configuration",
+    "`factory.md` \u2014 this file",
+    "`CLAUDE.md` \u2014 project conventions",
+    "`README.md` \u2014 documentation"
+  ],
+  "fixed_surfaces": [
+    "`.factory/` \u2014 factory infrastructure",
+    "`data/benchmarks/` \u2014 downloaded benchmark data (read-only after download)"
+  ],
+  "research_constraints": [],
+  "cost_budget": null,
+  "hard_constraints": [],
+  "eval_spec": [],
+  "hygiene_weights": null,
+  "growth_weights": null,
+  "clean_pr": false,
+  "clean_pr_include": [],
+  "clean_pr_exclude": [],
+  "test_timeout": 600
+}

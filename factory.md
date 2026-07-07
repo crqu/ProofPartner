@@ -1,8 +1,8 @@
-# Factory Configuration — Agentic Mathematical Research Partner
+# Factory Configuration — ProofPartner
 
 ## Project
 
-- **Name**: Agentic Mathematical Research Partner
+- **Name**: ProofPartner
 - **Description**: Interactive agentic tool for math research using Lean 4 — transforms rough mathematical ideas into formal Lean 4 conjectures and discovers proofs through an explore-conjecture-prove loop
 - **Language**: Python 3.11+
 - **Framework**: Custom orchestrator (state machine)

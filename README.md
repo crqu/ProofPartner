@@ -1,4 +1,6 @@
-# Agentic Mathematical Research Partner
+# ProofPartner
+
+An agentic mathematical research partner that transforms rough math ideas into formal Lean 4 conjectures and discovers proofs.
 
 An interactive agentic tool that takes rough mathematical ideas and transforms them into formal Lean 4 conjectures, discovers proofs from scratch, or refines conjectures when they turn out to be false.
 

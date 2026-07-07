@@ -1,4 +1,4 @@
-# Agentic Mathematical Research Partner
+# ProofPartner
 
 ## Quick Start
 

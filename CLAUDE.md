@@ -4,7 +4,16 @@
 
 ```bash
 pip install -e ".[dev]"
+
+# With Vertex AI support
+pip install -e ".[dev]" && pip install 'anthropic[vertex]'
 ```
+
+### Environment Variables
+
+- `ANTHROPIC_API_KEY` — direct Anthropic API access
+- `CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_PROJECT_ID` — Vertex AI backend
+- `AGENTIC_RESEARCH_MODEL` — override default model (default: `claude-opus-4-6-20250616`)
 
 ## Commands
 
@@ -18,8 +27,9 @@ ruff check agentic_research/ tests/
 # Type check (if mypy installed)
 mypy agentic_research/
 
-# CLI
+# CLI (use --model to override LLM model for any command)
 agentic-research --help
+agentic-research --model claude-sonnet-4-20250514 explore 'my idea'
 
 # Eval harness
 python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid

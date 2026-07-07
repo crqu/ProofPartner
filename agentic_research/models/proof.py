@@ -6,6 +6,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from agentic_research.models.agents import TokenUsage
+
 
 class StrategyType(str, Enum):
     DIRECT = "direct"
@@ -130,3 +132,4 @@ class ProofPipelineResult(BaseModel):
     claim_check_passed: bool | None = None
     failure_stage: str | None = None
     failure_reason: str | None = None
+    total_token_usage: TokenUsage = Field(default_factory=TokenUsage)

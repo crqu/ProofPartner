@@ -285,8 +285,13 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float) -> None:
     with console.status(f"{_cost_display(cost_tracker, budget)} Formalizing: {conjecture[:60]}...") as status:
         form_result = pipeline.run(conjecture_nl=conjecture)
 
-        estimated_tokens = 2000
-        cost_tracker.record_usage(input_tokens=estimated_tokens, output_tokens=estimated_tokens // 2)
+        tokens = form_result.total_token_usage
+        cost_tracker.record_usage(
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
+            cache_read_tokens=tokens.cache_read_input_tokens,
+            cache_write_tokens=tokens.cache_creation_input_tokens,
+        )
         status.update(f"{_cost_display(cost_tracker, budget)} Formalization complete, checking intent...")
 
         if not form_result.success or form_result.theorem is None:
@@ -368,14 +373,40 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
 @click.argument("lean_statement")
 @click.option("--budget", type=float, default=10.00, help="Budget in USD (default: $10.00)")
 @click.option("--timeout", type=int, default=600, help="Timeout in seconds (default: 600)")
+@click.option(
+    "--backend",
+    type=click.Choice(["builtin", "leanstral"]),
+    default="builtin",
+    help="Proof backend to use (default: builtin)",
+)
 @click.pass_context
-def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int) -> None:
+def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str) -> None:
     """Attempt to prove a Lean 4 statement.
 
     Runs ProofPipeline with confirmation prompt before starting.
     Shows real-time progress with cost. Hard-stops when budget exceeded
     or timeout reached.
     """
+    import os
+
+    use_external = backend == "leanstral"
+    external_config = None
+
+    if use_external:
+        api_url = os.environ.get("LEANSTRAL_API_URL")
+        if not api_url:
+            console.print("[red]Error:[/red] LEANSTRAL_API_URL environment variable is required for the leanstral backend")
+            sys.exit(1)
+
+        from agentic_research.models.external_prover import ExternalProverConfig
+
+        external_config = ExternalProverConfig(
+            api_url=api_url,
+            api_key=os.environ.get("LEANSTRAL_API_KEY"),
+        )
+
+    console.print(f"[dim]Backend: {backend}[/dim]")
+
     if not click.confirm(
         f"Proof search is expensive! Budget: ${budget:.2f}, Timeout: {timeout}s. Proceed?",
         default=False,
@@ -396,17 +427,25 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
     from agentic_research.pipelines.proof import ProofPipeline
 
     pipeline = ProofPipeline(
-        llm_client=llm, lean_repl=lean_repl, lean_search=lean_search,
+        llm_client=llm,
+        lean_repl=lean_repl,
+        lean_search=lean_search,
+        use_external_prover=use_external,
+        external_prover_config=external_config,
     )
-
     start_time = time.monotonic()
 
     with console.status(f"{_cost_display(cost_tracker, budget)} Starting proof search...") as status:
         result = pipeline.run(lean_statement=lean_statement)
 
         elapsed = time.monotonic() - start_time
-        estimated_tokens = 5000
-        cost_tracker.record_usage(input_tokens=estimated_tokens, output_tokens=estimated_tokens // 2)
+        tokens = result.total_token_usage
+        cost_tracker.record_usage(
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
+            cache_read_tokens=tokens.cache_read_input_tokens,
+            cache_write_tokens=tokens.cache_creation_input_tokens,
+        )
         status.update(f"{_cost_display(cost_tracker, budget)} Proof search complete ({elapsed:.1f}s)")
 
     if _check_budget(cost_tracker, budget):

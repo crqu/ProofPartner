@@ -252,7 +252,7 @@ class TestOrchestratorConfig:
         cfg = OrchestratorConfig()
         assert cfg.max_conjectures == 5
         assert cfg.max_refinements == 3
-        assert cfg.budget_limit_usd is None
+        assert cfg.budget_limit_usd == 10.0
         assert cfg.auto_mode is True
 
     def test_custom(self):

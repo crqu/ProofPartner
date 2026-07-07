@@ -34,6 +34,8 @@ from agentic_research.models.session import (
     compute_cost,
 )
 from agentic_research.models.verification import CounterexampleStatus, IntentVerdictType
+from agentic_research.orchestrator.circuit_breaker import CircuitBreaker
+from agentic_research.orchestrator.cost_tracker import CostTracker
 from agentic_research.orchestrator.rollback import CheckpointManager
 from agentic_research.orchestrator.state import PipelineStateMachine
 from agentic_research.pipelines.formalization import FormalizationPipeline
@@ -68,6 +70,9 @@ class ResearchOrchestrator:
         self._total_tokens = TokenUsage()
         self._stage_usages: list[StageTokenUsage] = []
         self._exploration_rounds = 0
+        self._circuit_breaker = CircuitBreaker()
+        self._cost_tracker = CostTracker()
+        self._reasoning_cycles = 0
 
     @property
     def session_id(self) -> str:
@@ -88,6 +93,14 @@ class ResearchOrchestrator:
     @property
     def total_tokens(self) -> TokenUsage:
         return self._total_tokens
+
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        return self._circuit_breaker
+
+    @property
+    def cost_tracker(self) -> CostTracker:
+        return self._cost_tracker
 
     def run(self, raw_idea: str) -> ResearchSessionResult:
         """Execute the full explore-conjecture-prove loop."""
@@ -114,6 +127,26 @@ class ResearchOrchestrator:
                 )
                 break
 
+            if self._reasoning_cycles >= self._config.max_reasoning_cycles:
+                log.info(
+                    "orchestrator_max_reasoning_cycles",
+                    cycles=self._reasoning_cycles,
+                    limit=self._config.max_reasoning_cycles,
+                )
+                self._state_machine.transition(
+                    PipelineStage.FAILED,
+                    reason=f"Max reasoning cycles ({self._config.max_reasoning_cycles}) reached",
+                )
+                break
+
+            if self._circuit_breaker.is_open():
+                log.info("orchestrator_circuit_breaker_open")
+                self._state_machine.transition(
+                    PipelineStage.FAILED, reason="Circuit breaker open — too many failures"
+                )
+                break
+
+            self._reasoning_cycles += 1
             stage = self._state_machine.current_stage
 
             if stage == PipelineStage.EXPLORING:
@@ -153,11 +186,13 @@ class ResearchOrchestrator:
         self._record_stage_usage(PipelineStage.EXPLORING, "exploration_agent", result.token_usage)
 
         if result.status != AgentStatus.SUCCESS or not result.result:
+            self._circuit_breaker.record_failure()
             self._state_machine.transition(
                 PipelineStage.FAILED, reason="Exploration failed"
             )
             return
 
+        self._circuit_breaker.record_success()
         exploration = ExplorationResult.model_validate(result.result)
         for d in exploration.directions:
             self._memory.add_promising_direction(
@@ -180,11 +215,13 @@ class ResearchOrchestrator:
         self._record_stage_usage(PipelineStage.CONJECTURING, "conjecture_generator", result.token_usage)
 
         if result.status != AgentStatus.SUCCESS or not result.result:
+            self._circuit_breaker.record_failure()
             self._state_machine.transition(
                 PipelineStage.EXPLORING, reason="Conjecture generation failed"
             )
             return
 
+        self._circuit_breaker.record_success()
         conjecture_set = ConjectureSet.model_validate(result.result)
         conjectures = conjecture_set.conjectures
         if not conjectures:
@@ -245,6 +282,7 @@ class ResearchOrchestrator:
         result = pipeline.run(conj.natural_language)
 
         if not result.success or not result.theorem:
+            self._circuit_breaker.record_failure()
             self._memory.update_conjecture_outcome(
                 conj.statement,
                 ConjectureOutcome.FORMALIZATION_FAILED,
@@ -257,6 +295,7 @@ class ResearchOrchestrator:
             )
             return
 
+        self._circuit_breaker.record_success()
         self._active_lean_statement = result.theorem.lean_statement
         self._memory.update_conjecture_outcome(
             conj.statement,
@@ -455,6 +494,13 @@ class ResearchOrchestrator:
             stage=stage, agent_name=agent_name, token_usage=usage
         ))
         self._accumulate_tokens(usage)
+        self._cost_tracker.record_usage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            model=self._llm.model,
+            cache_read_tokens=usage.cache_read_input_tokens,
+            cache_write_tokens=usage.cache_creation_input_tokens,
+        )
         log.info(
             "stage_token_usage",
             stage=stage.value,

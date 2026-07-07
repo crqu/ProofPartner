@@ -9,8 +9,10 @@ Feature flag OPENAI_ENABLED gates optional GPT integration (disabled by default)
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
+import time
 from typing import Any
 
 from agentic_research.logging import get_logger
@@ -26,6 +28,10 @@ class LLMClientError(Exception):
     """Raised when the LLM client encounters an unrecoverable error."""
 
 
+class LLMRetryExhaustedError(LLMClientError):
+    """Raised when all retry attempts have been exhausted."""
+
+
 class LLMClient:
     """Unified LLM client for the agent framework."""
 
@@ -35,10 +41,16 @@ class LLMClient:
         api_key: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        max_retries: int = 3,
+        backoff_base: float = 1.0,
+        backoff_max: float = 30.0,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._max_retries = max_retries
+        self._backoff_base = backoff_base
+        self._backoff_max = backoff_max
 
         resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not resolved_key:
@@ -101,7 +113,7 @@ class LLMClient:
             extended_thinking=use_extended_thinking,
         )
 
-        response = self._client.messages.create(**kwargs)
+        response = self._call_with_retries(kwargs)
 
         content_text = ""
         thinking_text = None
@@ -134,6 +146,32 @@ class LLMClient:
             token_usage=token_usage,
             thinking=thinking_text,
         )
+
+    def _call_with_retries(self, kwargs: dict[str, Any]) -> Any:
+        last_exc: Exception | None = None
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                return self._client.messages.create(**kwargs)
+            except Exception as exc:
+                last_exc = exc
+                if attempt == self._max_retries:
+                    break
+                delay = min(
+                    self._backoff_base * math.pow(2, attempt - 1),
+                    self._backoff_max,
+                )
+                log.warning(
+                    "llm_retry",
+                    attempt=attempt,
+                    max_retries=self._max_retries,
+                    delay=delay,
+                    error=str(exc),
+                )
+                time.sleep(delay)
+
+        raise LLMRetryExhaustedError(
+            f"All {self._max_retries} retries exhausted: {last_exc}"
+        ) from last_exc
 
     def extract_json(self, text: str) -> dict | list | None:
         """Extract JSON from LLM response text (code blocks or raw)."""

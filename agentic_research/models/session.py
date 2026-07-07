@@ -229,9 +229,10 @@ class OrchestratorConfig(BaseModel):
 
     max_conjectures: int = Field(default=5, ge=1, description="Max conjectures to evaluate per session")
     max_refinements: int = Field(default=3, ge=0, description="Max refinement attempts per conjecture")
-    budget_limit_usd: float | None = Field(default=None, ge=0.0, description="Optional cost ceiling in USD")
+    budget_limit_usd: float | None = Field(default=10.0, ge=0.0, description="Cost ceiling in USD")
     auto_mode: bool = Field(default=True, description="If True, proceed without user input at decision points")
     max_exploration_rounds: int = Field(default=2, ge=1, description="Max times to loop back to Explorer")
+    max_reasoning_cycles: int = Field(default=25, ge=1, description="Max stage transitions before halting")
 
 
 class ResearchSessionResult(BaseModel):

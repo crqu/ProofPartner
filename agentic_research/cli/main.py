@@ -41,10 +41,13 @@ def _save_session(session) -> None:
     session.save(path)
 
 
-def _create_llm_client():
+def _create_llm_client(model: str | None = None):
     from agentic_research.agents.llm_client import LLMClient
 
-    return LLMClient()
+    kwargs: dict[str, str] = {}
+    if model is not None:
+        kwargs["model"] = model
+    return LLMClient(**kwargs)
 
 
 def _create_lean_repl():
@@ -100,9 +103,13 @@ def _print_cost_summary(cost_tracker, budget: float) -> None:
 @click.version_option(version=__version__)
 @click.option("--json-logs/--console-logs", default=False, help="Use JSON log format")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]))
-def cli(json_logs: bool, log_level: str) -> None:
+@click.option("--model", default=None, envvar="AGENTIC_RESEARCH_MODEL", help="LLM model to use (default: claude-opus-4-6-20250616)")
+@click.pass_context
+def cli(ctx: click.Context, json_logs: bool, log_level: str, model: str | None) -> None:
     """Agentic Mathematical Research Partner."""
     configure_logging(json_output=json_logs, level=log_level)
+    ctx.ensure_object(dict)
+    ctx.obj["model"] = model
 
 
 @cli.command("eval")
@@ -114,7 +121,9 @@ def cli(json_logs: bool, log_level: str) -> None:
 @click.option("--seed", type=int, default=0, help="Random seed for sampling")
 @click.option("--data-dir", type=click.Path(), default="data/benchmarks")
 @click.option("--output", "-o", type=click.Path(), default=None, help="Write JSON report to file")
+@click.pass_context
 def eval_cmd(
+    ctx: click.Context,
     benchmark: str,
     mode: str,
     split: str,
@@ -151,7 +160,8 @@ def eval_cmd(
 @cli.command("explore")
 @click.argument("idea")
 @click.option("--budget", type=float, default=2.00, help="Budget in USD (default: $2.00)")
-def explore_cmd(idea: str, budget: float) -> None:
+@click.pass_context
+def explore_cmd(ctx: click.Context, idea: str, budget: float) -> None:
     """Explore a rough mathematical idea and generate conjectures.
 
     Runs ExplorationAgent + ConjectureGenerator. Takes a natural language
@@ -166,7 +176,7 @@ def explore_cmd(idea: str, budget: float) -> None:
     session = _load_or_create_session()
 
     try:
-        llm = _create_llm_client()
+        llm = _create_llm_client(model=ctx.obj.get("model"))
         lean_search = _create_lean_search()
     except Exception as e:
         console.print(f"[red]Setup error:[/red] {e}")
@@ -242,7 +252,8 @@ def explore_cmd(idea: str, budget: float) -> None:
 @cli.command("formalize")
 @click.argument("conjecture")
 @click.option("--budget", type=float, default=3.00, help="Budget in USD (default: $3.00)")
-def formalize_cmd(conjecture: str, budget: float) -> None:
+@click.pass_context
+def formalize_cmd(ctx: click.Context, conjecture: str, budget: float) -> None:
     """Formalize a natural language conjecture into Lean 4.
 
     Runs FormalizationPipeline + IntentJudge. Takes a natural language
@@ -256,7 +267,7 @@ def formalize_cmd(conjecture: str, budget: float) -> None:
     session = _load_or_create_session()
 
     try:
-        llm = _create_llm_client()
+        llm = _create_llm_client(model=ctx.obj.get("model"))
         lean_repl = _create_lean_repl()
         lean_search = _create_lean_search()
     except Exception as e:
@@ -315,7 +326,8 @@ def formalize_cmd(conjecture: str, budget: float) -> None:
 @cli.command("check")
 @click.argument("lean_statement")
 @click.option("--budget", type=float, default=2.00, help="Budget in USD (default: $2.00)")
-def check_cmd(lean_statement: str, budget: float) -> None:
+@click.pass_context
+def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
     """Search for counterexamples to a Lean 4 statement.
 
     Runs CounterexampleSearcher. Returns PLAUSIBLE (no counterexample found)
@@ -327,7 +339,7 @@ def check_cmd(lean_statement: str, budget: float) -> None:
     cost_tracker = _create_cost_tracker()
 
     try:
-        llm = _create_llm_client()
+        llm = _create_llm_client(model=ctx.obj.get("model"))
         lean_repl = _create_lean_repl()
     except Exception as e:
         console.print(f"[red]Setup error:[/red] {e}")
@@ -356,7 +368,8 @@ def check_cmd(lean_statement: str, budget: float) -> None:
 @click.argument("lean_statement")
 @click.option("--budget", type=float, default=10.00, help="Budget in USD (default: $10.00)")
 @click.option("--timeout", type=int, default=600, help="Timeout in seconds (default: 600)")
-def prove_cmd(lean_statement: str, budget: float, timeout: int) -> None:
+@click.pass_context
+def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int) -> None:
     """Attempt to prove a Lean 4 statement.
 
     Runs ProofPipeline with confirmation prompt before starting.
@@ -373,7 +386,7 @@ def prove_cmd(lean_statement: str, budget: float, timeout: int) -> None:
     cost_tracker = _create_cost_tracker()
 
     try:
-        llm = _create_llm_client()
+        llm = _create_llm_client(model=ctx.obj.get("model"))
         lean_repl = _create_lean_repl()
         lean_search = _create_lean_search()
     except Exception as e:

@@ -166,7 +166,7 @@ class Auctioneer(BaseAgent):
 
         candidates: list[TypeFormalizationCandidate] = []
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 log.warning("auctioneer_candidate_error", candidate_id=i, error=str(result))
                 candidates.append(TypeFormalizationCandidate(
                     candidate_id=i,

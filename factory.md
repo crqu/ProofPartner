@@ -8,6 +8,10 @@
 - **Framework**: Custom orchestrator (state machine)
 - **Target branch**: master
 
+## Goal
+
+Expand ProofPartner's proof discovery capabilities through improved formalization accuracy, conjecture generation diversity, and proof search effectiveness.
+
 ## Eval Dimensions
 
 - **tests**: Unit and integration test pass rate (`pytest tests/ -v`)
@@ -16,13 +20,17 @@
 - **capability_surface**: Fraction of core pipeline stages implemented and functional
 - **observability**: Structured logging coverage and cost tracking instrumentation
 
+## Threshold
+
+0.45
+
 ## Eval Command
 
 ```bash
 pytest tests/ -v
 ```
 
-## Mutable Surfaces
+## Modifiable
 
 - `agentic_research/` — all source code
 - `tests/` — test suite

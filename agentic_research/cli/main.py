@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
@@ -17,6 +18,9 @@ from rich.table import Table
 
 from agentic_research import __version__
 from agentic_research.logging import configure_logging
+
+if TYPE_CHECKING:
+    from agentic_research.orchestrator.cost_tracker import CostTracker
 
 SESSION_DIR = Path(".agentic_research/sessions")
 console = Console()
@@ -44,10 +48,9 @@ def _save_session(session) -> None:
 def _create_llm_client(model: str | None = None):
     from agentic_research.agents.llm_client import LLMClient
 
-    kwargs: dict[str, str] = {}
     if model is not None:
-        kwargs["model"] = model
-    return LLMClient(**kwargs)
+        return LLMClient(model=model)
+    return LLMClient()
 
 
 def _create_lean_repl():
@@ -68,12 +71,12 @@ def _create_cost_tracker():
     return CostTracker()
 
 
-def _check_budget(cost_tracker, budget: float) -> bool:
+def _check_budget(cost_tracker: CostTracker, budget: float) -> bool:
     """Return True if budget is exceeded."""
     return cost_tracker.total_cost() > budget
 
 
-def _cost_display(cost_tracker, budget: float) -> str:
+def _cost_display(cost_tracker: CostTracker, budget: float) -> str:
     return f"[cost: ${cost_tracker.total_cost():.2f} / ${budget:.2f}]"
 
 
@@ -88,7 +91,7 @@ def _record_agent_tokens(cost_tracker, agent) -> None:
     )
 
 
-def _print_cost_summary(cost_tracker, budget: float) -> None:
+def _print_cost_summary(cost_tracker: CostTracker, budget: float) -> None:
     table = Table(title="Cost Summary", show_header=False)
     table.add_column("Label", style="bold")
     table.add_column("Value")
@@ -186,8 +189,8 @@ def explore_cmd(ctx: click.Context, idea: str, budget: float) -> None:
     conjecture_gen = ConjectureGenerator(llm_client=llm)
 
     with console.status(f"{_cost_display(cost_tracker, budget)} Exploring: {idea[:60]}...") as status:
-        ctx = AgentContext(task=idea)
-        explore_result = explorer.run(ctx)
+        agent_ctx = AgentContext(task=idea)
+        explore_result = explorer.run(agent_ctx)
         _record_agent_tokens(cost_tracker, explorer)
         status.update(f"{_cost_display(cost_tracker, budget)} Exploration complete, generating conjectures...")
 
@@ -470,6 +473,94 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 
     console.print(f"\nElapsed: {elapsed:.1f}s")
     _print_cost_summary(cost_tracker, budget)
+
+
+@cli.command("research")
+@click.argument("idea")
+@click.option("--budget", type=float, default=20.00, help="Budget in USD (default: $20.00)")
+@click.option("--max-conjectures", type=int, default=5, help="Max conjectures to evaluate (default: 5)")
+@click.option("--max-refinements", type=int, default=3, help="Max refinement attempts per conjecture (default: 3)")
+@click.pass_context
+def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int) -> None:
+    """Run the full explore-conjecture-prove research loop.
+
+    Automatically explores the idea, generates conjectures, formalizes them
+    into Lean 4, checks for counterexamples, attempts proofs, and refines
+    on failure. Creates checkpoints at each stage for resumability.
+    """
+    from agentic_research.models.session import (
+        OrchestratorConfig,
+        PipelineStage,
+    )
+    from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+    if not click.confirm(
+        f"Full research loop. Budget: ${budget:.2f}. Continue?",
+        default=False,
+    ):
+        console.print("Aborted.")
+        return
+
+    try:
+        llm = _create_llm_client(model=ctx.obj.get("model"))
+        lean_repl = _create_lean_repl()
+        lean_search = _create_lean_search()
+    except Exception as e:
+        console.print(f"[red]Setup error:[/red] {e}")
+        sys.exit(1)
+
+    config = OrchestratorConfig(
+        budget_limit_usd=budget,
+        max_conjectures=max_conjectures,
+        max_refinements=max_refinements,
+    )
+
+    orchestrator = ResearchOrchestrator(
+        llm_client=llm,
+        lean_repl=lean_repl,
+        lean_search=lean_search,
+        config=config,
+    )
+
+    try:
+        with console.status(f"[bold]Researching:[/bold] {idea[:60]}...") as status:
+            result = orchestrator.run(idea)
+            status.update("[bold]Research complete.[/bold]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        result = orchestrator._build_result(idea)
+
+    if result.final_stage == PipelineStage.COMPLETE:
+        console.print("\n[green bold]RESEARCH COMPLETE[/green bold]")
+    else:
+        console.print("\n[yellow bold]RESEARCH INCOMPLETE[/yellow bold]")
+
+    stats_table = Table(title="Research Results", show_header=False)
+    stats_table.add_column("Metric", style="bold")
+    stats_table.add_column("Value")
+    stats_table.add_row("Stage reached", result.final_stage.value)
+    stats_table.add_row("Conjectures tried", str(result.total_conjectures_tried))
+    stats_table.add_row("Proofs attempted", str(result.total_refinements + len(result.proved_conjectures) + len(result.failed_conjectures)))
+    stats_table.add_row("Proofs succeeded", str(len(result.proved_conjectures)))
+    stats_table.add_row("Total cost", f"${result.cost_estimate.total_cost_usd:.4f}")
+    console.print(stats_table)
+
+    if result.proved_conjectures:
+        proved_table = Table(title="Proved Conjectures")
+        proved_table.add_column("Conjecture", style="cyan")
+        proved_table.add_column("Lean Statement", style="green")
+        for tc in result.proved_conjectures:
+            stmt = tc.conjecture.statement
+            if len(stmt) > 80:
+                stmt = stmt[:77] + "..."
+            lean = tc.lean_statement
+            if len(lean) > 80:
+                lean = lean[:77] + "..."
+            proved_table.add_row(stmt, lean)
+        console.print(proved_table)
+
+    console.print(f"\n[dim]Session: {result.session_id}[/dim]")
+    console.print(f"[dim]Resume with: agentic-research resume {result.session_id}[/dim]")
 
 
 @cli.command("status")

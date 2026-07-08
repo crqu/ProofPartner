@@ -101,6 +101,17 @@ class HintCleaner(BaseTool):
         self._config = config
         log.info("hint_cleaner_init", keep_doc_strings=config.keep_doc_strings)
 
+    def execute(self, code: str) -> CleanResult:
+        result = super().execute(code)
+        if isinstance(result, CleanResult):
+            return result
+        return CleanResult(
+            status=result.status,
+            original_code=code,
+            cleaned_code=code,
+            comments_removed=0,
+        )
+
     def _run(self, input_data: Any) -> CleanResult:
         code = str(input_data)
         cleaned, removed_count = _remove_comments(code, self._config.keep_doc_strings)

@@ -55,6 +55,20 @@ class TestTypeCandidate:
         )
         assert tc.depends_on == ["SimpleGraph"]
 
+    def test_composition_alternative_default(self):
+        tc = TypeCandidate(name="T", informal_description="d")
+        assert tc.composition_alternative is None
+
+    def test_composition_alternative_set(self):
+        tc = TypeCandidate(
+            name="UniformLipschitz",
+            informal_description="Lipschitz uniform in second arg",
+            composition_alternative="∀ ε, LipschitzWith L (fun x => g x ε)",
+            is_in_mathlib=False,
+        )
+        assert tc.composition_alternative == "∀ ε, LipschitzWith L (fun x => g x ε)"
+        assert tc.is_in_mathlib is False
+
     def test_serialization(self):
         tc = TypeCandidate(
             name="T", informal_description="d",
@@ -63,6 +77,15 @@ class TestTypeCandidate:
         )
         restored = TypeCandidate.model_validate(tc.model_dump())
         assert restored == tc
+
+    def test_serialization_with_composition(self):
+        tc = TypeCandidate(
+            name="T", informal_description="d",
+            composition_alternative="∀ x, SomeType x",
+        )
+        restored = TypeCandidate.model_validate(tc.model_dump())
+        assert restored == tc
+        assert restored.composition_alternative == "∀ x, SomeType x"
 
 
 class TestTypePlan:
@@ -970,6 +993,135 @@ class TestFormalizationPipeline:
 
         result = pipeline.run("Natural numbers have interesting properties")
         assert result.success
+
+    def test_composition_alternative_skips_type(self):
+        from agentic_research.pipelines.formalization import FormalizationPipeline
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        plan_with_composition = json.dumps({
+            "candidates": [
+                {
+                    "name": "UniformLipschitz",
+                    "informal_description": "Lipschitz uniform in second arg",
+                    "is_in_mathlib": False,
+                    "composition_alternative": "∀ ε, LipschitzWith L (fun x => g x ε)",
+                },
+            ],
+            "dependency_graph": {"edges": [], "topological_order": ["UniformLipschitz"]},
+            "mathlib_imports": ["Mathlib.Topology.MetricSpace.Lipschitz"],
+        })
+
+        empty_lemmas = json.dumps({"lemmas": []})
+
+        llm = _make_mock_llm([
+            plan_with_composition,
+            empty_lemmas,
+            MOCK_THEOREM_LEAN,
+            MOCK_CLAIM_CHECK_PASS,
+        ])
+
+        pipeline = FormalizationPipeline(
+            llm_client=llm, lean_repl=repl, lean_search=search,
+        )
+
+        result = pipeline.run("Lipschitz functions uniform in second argument")
+        assert result.success
+        assert result.type_formalization is not None
+        assert result.type_formalization.all_types_accepted
+        assert result.type_formalization.accepted_types == []
+
+    def test_composition_alternative_added_to_prior_definitions(self):
+        from agentic_research.pipelines.formalization import FormalizationPipeline
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        plan_mixed = json.dumps({
+            "candidates": [
+                {
+                    "name": "UniformLipschitz",
+                    "informal_description": "Lipschitz uniform in second arg",
+                    "is_in_mathlib": False,
+                    "composition_alternative": "∀ ε, LipschitzWith L (fun x => g x ε)",
+                },
+                {
+                    "name": "QuasiRandomGraph",
+                    "informal_description": "A graph with quasi-random properties",
+                    "is_in_mathlib": False,
+                    "composition_alternative": None,
+                },
+            ],
+            "dependency_graph": {
+                "edges": [],
+                "topological_order": ["UniformLipschitz", "QuasiRandomGraph"],
+            },
+            "mathlib_imports": [],
+        })
+
+        responses = [
+            plan_mixed,
+            MOCK_LEMMA_PLAN_RESPONSE,
+        ]
+        for _k in range(3):
+            responses.append(MOCK_TYPE_LEAN_CODE)
+            responses.append(MOCK_LEMMA_LEAN_CODE)
+            responses.append(MOCK_PROOF_CODE)
+            responses.append(MOCK_LEMMA_LEAN_CODE)
+            responses.append(MOCK_PROOF_CODE)
+        responses.append(MOCK_THEOREM_LEAN)
+        responses.append(MOCK_CLAIM_CHECK_PASS)
+
+        llm = _make_mock_llm(responses)
+
+        pipeline = FormalizationPipeline(
+            llm_client=llm, lean_repl=repl, lean_search=search,
+            k=3,
+            prover_config=ProverConfig(max_iterations=1),
+        )
+
+        result = pipeline.run("Mixed types conjecture")
+        assert result.success
+        assert len(result.type_formalization.accepted_types) == 1
+        assert result.type_formalization.accepted_types[0].type_name == "QuasiRandomGraph"
+
+    def test_without_composition_alternative_still_processed(self):
+        from agentic_research.pipelines.formalization import FormalizationPipeline
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        responses = [
+            MOCK_TYPE_PLAN_RESPONSE,
+            MOCK_LEMMA_PLAN_RESPONSE,
+        ]
+        for _k in range(3):
+            responses.append(MOCK_TYPE_LEAN_CODE)
+            responses.append(MOCK_LEMMA_LEAN_CODE)
+            responses.append(MOCK_PROOF_CODE)
+            responses.append(MOCK_LEMMA_LEAN_CODE)
+            responses.append(MOCK_PROOF_CODE)
+        responses.append(MOCK_THEOREM_LEAN)
+        responses.append(MOCK_CLAIM_CHECK_PASS)
+
+        llm = _make_mock_llm(responses)
+
+        pipeline = FormalizationPipeline(
+            llm_client=llm, lean_repl=repl, lean_search=search,
+            k=3,
+            prover_config=ProverConfig(max_iterations=1),
+        )
+
+        result = pipeline.run("Normal type without composition alternative")
+        assert result.success
+        assert len(result.type_formalization.accepted_types) == 1
 
 
 # ---------------------------------------------------------------------------

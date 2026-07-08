@@ -173,7 +173,23 @@ class FormalizationPipeline:
         total_proved = 0
         total_failed = 0
 
-        new_types = [c for c in type_plan.candidates if not c.is_in_mathlib]
+        new_types: list[TypeCandidate] = []
+        for c in type_plan.candidates:
+            if c.is_in_mathlib:
+                continue
+            if c.composition_alternative:
+                log.info(
+                    "type_composition_alternative_used",
+                    type_name=c.name,
+                    composition=c.composition_alternative,
+                )
+                prior_definitions = (
+                    f"{prior_definitions}\n\n-- {c.name}: {c.composition_alternative}"
+                    if prior_definitions
+                    else f"-- {c.name}: {c.composition_alternative}"
+                )
+                continue
+            new_types.append(c)
         topo_order = type_plan.dependency_graph.topological_order
         if topo_order:
             ordered = sorted(

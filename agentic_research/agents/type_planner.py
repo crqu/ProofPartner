@@ -100,6 +100,7 @@ class TypePlanner(BaseAgent):
                     depends_on=c.get("depends_on", []),
                     mathlib_analog=c.get("mathlib_analog"),
                     is_in_mathlib=c.get("is_in_mathlib", False),
+                    composition_alternative=c.get("composition_alternative"),
                 ))
 
         dep_graph_raw = parsed.get("dependency_graph", {})

@@ -43,8 +43,18 @@ class Informalizer(BaseAgent):
         )
 
     def informalize(self, lean_code: str) -> InformalizationResult:
+        log.info(
+            "informalizer_started",
+            code_length=len(lean_code),
+            model=self._llm.model,
+        )
         clean_result = self._cleaner.execute(lean_code)
         cleaned = clean_result.cleaned_code
+        log.debug(
+            "informalizer_hints_cleaned",
+            original_length=len(lean_code),
+            cleaned_length=len(cleaned),
+        )
 
         prompt = INFORMALIZE_PROMPT.format(lean_code=cleaned)
         response = self._llm.complete(
@@ -52,7 +62,13 @@ class Informalizer(BaseAgent):
             temperature=0.0,
         )
 
-        return InformalizationResult(
+        result = InformalizationResult(
             lean_input=lean_code,
             natural_language_output=response.content.strip(),
         )
+        log.info(
+            "informalizer_complete",
+            output_length=len(result.natural_language_output),
+            tokens_used=self.cumulative_tokens.total_tokens,
+        )
+        return result

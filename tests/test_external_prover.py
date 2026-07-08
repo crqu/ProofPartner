@@ -275,7 +275,8 @@ class TestProofPipelineWithExternalProver:
         llm.complete.assert_not_called()
 
     @patch("agentic_research.tools.external_prover.httpx.post")
-    def test_external_prover_failure_falls_back(self, mock_post):
+    @patch("agentic_research.tools.lean_repl.LeanRepl.try_automated_tactics", return_value=None)
+    def test_external_prover_failure_falls_back(self, _mock_tactic, mock_post):
         from agentic_research.pipelines.proof import ProofPipeline
 
         mock_post.side_effect = httpx.TimeoutException("timed out")
@@ -321,7 +322,8 @@ class TestProofPipelineWithExternalProver:
         assert result.total_token_usage.input_tokens == 200
         assert result.total_token_usage.output_tokens == 100
 
-    def test_external_prover_disabled_uses_builtin(self):
+    @patch("agentic_research.tools.lean_repl.LeanRepl.try_automated_tactics", return_value=None)
+    def test_external_prover_disabled_uses_builtin(self, _mock_tactic):
         from agentic_research.pipelines.proof import ProofPipeline
         from agentic_research.models.agents import ProverConfig
 

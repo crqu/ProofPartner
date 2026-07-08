@@ -254,7 +254,8 @@ Return a JSON object with this exact structure:
       "lean_signature": "proposed Lean 4 signature sketch",
       "depends_on": ["OtherType"],
       "mathlib_analog": "closest Mathlib type or null",
-      "is_in_mathlib": false
+      "is_in_mathlib": false,
+      "composition_alternative": null
     }}
   ],
   "dependency_graph": {{
@@ -265,9 +266,26 @@ Return a JSON object with this exact structure:
 }}
 ```
 
+## Composition Alternatives
+When a mathematical concept can be expressed by composing existing Mathlib \
+constructs rather than inventing a new type, set `composition_alternative` \
+to the Lean 4 expression. Set `is_in_mathlib=false` (it is not a single \
+existing type) but provide the composition so the pipeline uses the \
+expression instead of generating a new definition.
+
+Example: For "Lipschitz function uniform in second argument", instead of \
+inventing a new type `UniformLipschitz`, set:
+  - `is_in_mathlib`: false
+  - `composition_alternative`: "∀ ε, LipschitzWith L (fun x => g x ε)"
+  - `mathlib_analog`: "LipschitzWith"
+
+Only set `composition_alternative` to null when the concept truly requires \
+a new type definition that cannot be expressed via Mathlib compositions.
+
 ## Guidelines
 - List types in topological order (dependencies first)
 - Mark types that already exist in Mathlib with is_in_mathlib=true
+- Prefer composition_alternative over inventing new types when possible
 - Include Mathlib imports needed for existing types
 - Keep type definitions minimal — only what's needed for the conjecture
 - Use standard Lean 4 / Mathlib naming conventions (CamelCase for types)

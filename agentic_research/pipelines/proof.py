@@ -8,6 +8,8 @@ Integrates ClaimCheck at each node to verify statement preservation.
 
 from __future__ import annotations
 
+import time
+
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
 from agentic_research.agents.lemma_breakdown import LemmaBreakdown
@@ -75,6 +77,23 @@ class ProofPipeline:
             if ext_result is not None:
                 return ext_result
             log.info("external_prover_fallback_to_builtin")
+
+        tactic_start = time.monotonic()
+        tactic = self._repl.try_automated_tactics(lean_statement)
+        if tactic is not None:
+            tactic_elapsed = time.monotonic() - tactic_start
+            proof_code = f"{lean_statement} by {tactic}"
+            log.info(
+                "automated_tactic_success",
+                tactic=tactic,
+                elapsed_seconds=round(tactic_elapsed, 3),
+            )
+            return ProofPipelineResult(
+                statement=lean_statement,
+                proved=True,
+                final_proof=proof_code,
+                total_token_usage=self._total_tokens,
+            )
 
         search_result = self._run_proof_search(lean_statement)
 

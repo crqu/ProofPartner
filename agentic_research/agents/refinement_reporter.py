@@ -52,7 +52,13 @@ class RefinementReporter(BaseAgent):
         )
 
     def generate_report(self, history: RefinementHistory) -> RefinementReport:
+        log.info(
+            "refinement_report_started",
+            conjecture_count=len(history.attempts),
+            refinement_round=history.attempts[-1].depth if history.attempts else 0,
+        )
         attempts_text = self._format_attempts(history)
+        log.debug("refinement_report_attempts_formatted", text_length=len(attempts_text))
 
         original_conjecture_text = "Not available"
         if history.original_conjecture:
@@ -76,10 +82,17 @@ class RefinementReporter(BaseAgent):
             temperature=0.3,
         )
 
-        return RefinementReport(
+        report = RefinementReport(
             markdown_report=response.content,
             structured_history=history,
         )
+        log.info(
+            "refinement_report_complete",
+            report_length=len(report.markdown_report),
+            suggestion_count=len(history.attempts),
+            tokens_used=self.cumulative_tokens.total_tokens,
+        )
+        return report
 
     def _format_attempts(self, history: RefinementHistory) -> str:
         if not history.attempts:

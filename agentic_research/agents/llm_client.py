@@ -76,7 +76,7 @@ class LLMClient:
 
         if resolved_key:
             self._model = model
-            self._client = anthropic.Anthropic(api_key=resolved_key)
+            self._client: anthropic.Anthropic | anthropic.AnthropicVertex = anthropic.Anthropic(api_key=resolved_key)
         elif use_vertex_flag or vertex_project:
             if not vertex_project:
                 raise LLMClientError(
@@ -217,7 +217,8 @@ class LLMClient:
         fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
         if fence_match:
             try:
-                return json.loads(fence_match.group(1))
+                parsed: dict | list | None = json.loads(fence_match.group(1))
+                return parsed
             except json.JSONDecodeError:
                 pass
 
@@ -233,7 +234,8 @@ class LLMClient:
                     depth -= 1
                     if depth == 0:
                         try:
-                            return json.loads(text[start : i + 1])
+                            result: dict | list | None = json.loads(text[start : i + 1])
+                            return result
                         except json.JSONDecodeError:
                             break
 

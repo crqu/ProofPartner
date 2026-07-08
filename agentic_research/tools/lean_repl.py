@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
+from collections.abc import Callable
 from typing import Any
 
 from agentic_research.logging import get_logger
@@ -229,7 +230,9 @@ class _LeanDojoBackend:
             )
 
 
-_BACKENDS = {
+_ReplBackendImpl = _MockBackend | _SubprocessBackend | _LeanDojoBackend
+
+_BACKENDS: dict[ReplBackend, Callable[[ReplConfig], _ReplBackendImpl]] = {
     ReplBackend.MOCK: lambda cfg: _MockBackend(),
     ReplBackend.LEAN_DOJO: lambda cfg: _LeanDojoBackend(cfg),
     ReplBackend.SUBPROCESS: lambda cfg: _SubprocessBackend(cfg),
@@ -245,12 +248,22 @@ class LeanRepl(BaseTool):
         if config is None:
             config = ReplConfig(backend=detect_backend())
         self._config = config
-        self._backend = _BACKENDS[config.backend](config)
+        self._backend: _MockBackend | _SubprocessBackend | _LeanDojoBackend = _BACKENDS[config.backend](config)
         log.info("lean_repl_init", backend=config.backend.value)
 
     @property
     def backend(self) -> ReplBackend:
         return self._config.backend
+
+    def execute(self, code: str) -> CompilationResult:
+        result = super().execute(code)
+        if isinstance(result, CompilationResult):
+            return result
+        return CompilationResult(
+            status=result.status,
+            compilation_status=CompilationStatus.ERROR,
+            error_message=result.error_message,
+        )
 
     def _run(self, input_data: Any) -> CompilationResult:
         code = str(input_data)

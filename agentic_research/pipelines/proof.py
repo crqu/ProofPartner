@@ -308,6 +308,6 @@ class ProofPipeline:
         result = checker.run(ctx)
         self._accumulate_tokens(checker.cumulative_tokens)
         if result.result:
-            verdict = result.result.get("verdict", "fail")
+            verdict: str = result.result.get("verdict", "fail")
             return verdict == ClaimCheckVerdict.PASS.value
         return True

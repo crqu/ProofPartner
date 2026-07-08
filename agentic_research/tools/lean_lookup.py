@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from enum import Enum
+from collections.abc import Callable
 from typing import Any
 
 from agentic_research.logging import get_logger
@@ -169,7 +170,9 @@ class _LeanDojoLookupBackend:
             )
 
 
-_BACKENDS = {
+_LookupBackendImpl = _MockLookupBackend | _WebLookupBackend | _LeanDojoLookupBackend
+
+_BACKENDS: dict[LookupBackend, Callable[[LookupConfig], _LookupBackendImpl]] = {
     LookupBackend.MOCK: lambda cfg: _MockLookupBackend(),
     LookupBackend.WEB: lambda cfg: _WebLookupBackend(cfg),
     LookupBackend.LEAN_DOJO: lambda cfg: _LeanDojoLookupBackend(),
@@ -185,7 +188,7 @@ class LeanLookup(BaseTool):
         if config is None:
             config = LookupConfig()
         self._config = config
-        self._backend = _BACKENDS[config.backend](config)
+        self._backend: _MockLookupBackend | _WebLookupBackend | _LeanDojoLookupBackend = _BACKENDS[config.backend](config)
         log.info("lean_lookup_init", backend=config.backend.value)
 
     @property

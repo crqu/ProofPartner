@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
@@ -17,6 +18,9 @@ from rich.table import Table
 
 from agentic_research import __version__
 from agentic_research.logging import configure_logging
+
+if TYPE_CHECKING:
+    from agentic_research.orchestrator.cost_tracker import CostTracker
 
 SESSION_DIR = Path(".agentic_research/sessions")
 console = Console()
@@ -44,10 +48,9 @@ def _save_session(session) -> None:
 def _create_llm_client(model: str | None = None):
     from agentic_research.agents.llm_client import LLMClient
 
-    kwargs: dict[str, str] = {}
     if model is not None:
-        kwargs["model"] = model
-    return LLMClient(**kwargs)
+        return LLMClient(model=model)
+    return LLMClient()
 
 
 def _create_lean_repl():
@@ -68,12 +71,12 @@ def _create_cost_tracker():
     return CostTracker()
 
 
-def _check_budget(cost_tracker, budget: float) -> bool:
+def _check_budget(cost_tracker: CostTracker, budget: float) -> bool:
     """Return True if budget is exceeded."""
     return cost_tracker.total_cost() > budget
 
 
-def _cost_display(cost_tracker, budget: float) -> str:
+def _cost_display(cost_tracker: CostTracker, budget: float) -> str:
     return f"[cost: ${cost_tracker.total_cost():.2f} / ${budget:.2f}]"
 
 
@@ -88,7 +91,7 @@ def _record_agent_tokens(cost_tracker, agent) -> None:
     )
 
 
-def _print_cost_summary(cost_tracker, budget: float) -> None:
+def _print_cost_summary(cost_tracker: CostTracker, budget: float) -> None:
     table = Table(title="Cost Summary", show_header=False)
     table.add_column("Label", style="bold")
     table.add_column("Value")
@@ -186,8 +189,8 @@ def explore_cmd(ctx: click.Context, idea: str, budget: float) -> None:
     conjecture_gen = ConjectureGenerator(llm_client=llm)
 
     with console.status(f"{_cost_display(cost_tracker, budget)} Exploring: {idea[:60]}...") as status:
-        ctx = AgentContext(task=idea)
-        explore_result = explorer.run(ctx)
+        agent_ctx = AgentContext(task=idea)
+        explore_result = explorer.run(agent_ctx)
         _record_agent_tokens(cost_tracker, explorer)
         status.update(f"{_cost_display(cost_tracker, budget)} Exploration complete, generating conjectures...")
 

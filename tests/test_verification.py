@@ -221,6 +221,8 @@ class TestInformalizer:
 
 _CORRECT_JSON = '{"verdict": "correct", "concerns": [], "confidence": 0.95, "reasoning": "matches"}'
 _INCORRECT_JSON = '{"verdict": "incorrect", "concerns": ["missing hypothesis"], "confidence": 0.8, "reasoning": "mismatch"}'
+_CORRECT_WITH_DIMS_JSON = '{"verdict": "correct", "concerns": [], "confidence": 0.95, "reasoning": "matches", "type_fidelity": 0.9, "quantifier_accuracy": 0.85, "constraint_preservation": 0.8}'
+_INCORRECT_WITH_DIMS_JSON = '{"verdict": "incorrect", "concerns": ["missing hypothesis"], "confidence": 0.8, "reasoning": "mismatch", "type_fidelity": 0.3, "quantifier_accuracy": 0.7, "constraint_preservation": 0.6}'
 
 
 class TestIntentJudge:
@@ -344,6 +346,194 @@ class TestIntentJudge:
             pv for pv in verdict.path_verdicts if pv.path == VerificationPath.BLIND
         )
         assert blind_pv.verdict == IntentVerdictType.INCORRECT
+
+    def test_dimension_scores_parsed(self):
+        judge = self._make_judge([
+            "Back translation.",
+            _CORRECT_WITH_DIMS_JSON,
+            _CORRECT_WITH_DIMS_JSON,
+            _CORRECT_WITH_DIMS_JSON,
+        ])
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        for pv in verdict.path_verdicts:
+            assert pv.type_fidelity == 0.9
+            assert pv.quantifier_accuracy == 0.85
+            assert pv.constraint_preservation == 0.8
+
+    def test_missing_dimensions_default_to_half(self):
+        judge = self._make_judge([
+            "Back translation.",
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+        ])
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        for pv in verdict.path_verdicts:
+            assert pv.type_fidelity == 0.5
+            assert pv.quantifier_accuracy == 0.5
+            assert pv.constraint_preservation == 0.5
+
+    def test_aggregated_dimensions_on_verdict(self):
+        judge = self._make_judge([
+            "Back translation.",
+            _CORRECT_WITH_DIMS_JSON,
+            _CORRECT_WITH_DIMS_JSON,
+            _CORRECT_WITH_DIMS_JSON,
+        ])
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.type_fidelity > 0.0
+        assert verdict.quantifier_accuracy > 0.0
+        assert verdict.constraint_preservation > 0.0
+        assert verdict.overall_confidence > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Dimension aggregation and passes_threshold
+# ---------------------------------------------------------------------------
+
+
+class TestDimensionAggregation:
+    def test_adversarial_weighted_higher(self):
+        from agentic_research.agents.intent_judge import _aggregate_dimensions
+
+        verdicts = [
+            PathVerdict(
+                path=VerificationPath.BLIND,
+                verdict=IntentVerdictType.CORRECT,
+                type_fidelity=1.0,
+                quantifier_accuracy=1.0,
+                constraint_preservation=1.0,
+            ),
+            PathVerdict(
+                path=VerificationPath.DIRECT,
+                verdict=IntentVerdictType.CORRECT,
+                type_fidelity=1.0,
+                quantifier_accuracy=1.0,
+                constraint_preservation=1.0,
+            ),
+            PathVerdict(
+                path=VerificationPath.ADVERSARIAL,
+                verdict=IntentVerdictType.CORRECT,
+                type_fidelity=0.0,
+                quantifier_accuracy=0.0,
+                constraint_preservation=0.0,
+            ),
+        ]
+        dims = _aggregate_dimensions(verdicts)
+        # weights: 1.0 + 1.0 + 1.5 = 3.5
+        # tf: (1.0 + 1.0 + 0.0*1.5) / 3.5 = 2.0/3.5 ≈ 0.5714
+        assert abs(dims["type_fidelity"] - 2.0 / 3.5) < 0.01
+        assert abs(dims["quantifier_accuracy"] - 2.0 / 3.5) < 0.01
+
+    def test_uniform_scores(self):
+        from agentic_research.agents.intent_judge import _aggregate_dimensions
+
+        verdicts = [
+            PathVerdict(
+                path=VerificationPath.BLIND,
+                verdict=IntentVerdictType.CORRECT,
+                type_fidelity=0.8,
+                quantifier_accuracy=0.8,
+                constraint_preservation=0.8,
+            ),
+            PathVerdict(
+                path=VerificationPath.DIRECT,
+                verdict=IntentVerdictType.CORRECT,
+                type_fidelity=0.8,
+                quantifier_accuracy=0.8,
+                constraint_preservation=0.8,
+            ),
+            PathVerdict(
+                path=VerificationPath.ADVERSARIAL,
+                verdict=IntentVerdictType.CORRECT,
+                type_fidelity=0.8,
+                quantifier_accuracy=0.8,
+                constraint_preservation=0.8,
+            ),
+        ]
+        dims = _aggregate_dimensions(verdicts)
+        assert abs(dims["type_fidelity"] - 0.8) < 0.01
+        assert abs(dims["overall_confidence"] - 0.8) < 0.01
+
+    def test_empty_verdicts(self):
+        from agentic_research.agents.intent_judge import _aggregate_dimensions
+
+        dims = _aggregate_dimensions([])
+        assert dims["type_fidelity"] == 0.5
+        assert dims["overall_confidence"] == 0.5
+        assert dims["passes"] is False
+
+
+class TestPassesThreshold:
+    def test_all_pass(self):
+        v = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+            type_fidelity=0.8,
+            quantifier_accuracy=0.7,
+            constraint_preservation=0.9,
+            overall_confidence=0.8,
+        )
+        assert v.passes_threshold is True
+
+    def test_one_dimension_low(self):
+        v = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+            type_fidelity=0.3,
+            quantifier_accuracy=0.8,
+            constraint_preservation=0.9,
+            overall_confidence=0.7,
+        )
+        assert v.passes_threshold is False
+
+    def test_overall_confidence_low(self):
+        v = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+            type_fidelity=0.5,
+            quantifier_accuracy=0.5,
+            constraint_preservation=0.5,
+            overall_confidence=0.5,
+        )
+        assert v.passes_threshold is False
+
+    def test_boundary_values_pass(self):
+        v = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+            type_fidelity=0.4,
+            quantifier_accuracy=0.4,
+            constraint_preservation=0.4,
+            overall_confidence=0.6,
+        )
+        assert v.passes_threshold is True
+
+    def test_boundary_just_below_fails(self):
+        v = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+            type_fidelity=0.39,
+            quantifier_accuracy=0.4,
+            constraint_preservation=0.4,
+            overall_confidence=0.6,
+        )
+        assert v.passes_threshold is False
+
+    def test_backward_compat_defaults(self):
+        v = IntentVerdict(overall_verdict=IntentVerdictType.CORRECT)
+        assert v.type_fidelity == 0.5
+        assert v.quantifier_accuracy == 0.5
+        assert v.constraint_preservation == 0.5
+        assert v.overall_confidence == 0.5
+        assert v.passes_threshold is False
 
 
 # ---------------------------------------------------------------------------

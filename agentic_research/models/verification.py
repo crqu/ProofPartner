@@ -31,6 +31,9 @@ class PathVerdict(BaseModel):
     concerns: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reasoning: str = Field(default="")
+    type_fidelity: float = Field(default=0.5, ge=0.0, le=1.0)
+    quantifier_accuracy: float = Field(default=0.5, ge=0.0, le=1.0)
+    constraint_preservation: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 class IntentVerdict(BaseModel):
@@ -40,10 +43,23 @@ class IntentVerdict(BaseModel):
     path_verdicts: list[PathVerdict] = Field(default_factory=list)
     adjudication_notes: str = Field(default="")
     all_concerns: list[str] = Field(default_factory=list)
+    type_fidelity: float = Field(default=0.5, ge=0.0, le=1.0)
+    quantifier_accuracy: float = Field(default=0.5, ge=0.0, le=1.0)
+    constraint_preservation: float = Field(default=0.5, ge=0.0, le=1.0)
+    overall_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
     @property
     def has_concerns(self) -> bool:
         return len(self.all_concerns) > 0
+
+    @property
+    def passes_threshold(self) -> bool:
+        return (
+            self.overall_confidence >= 0.6
+            and self.type_fidelity >= 0.4
+            and self.quantifier_accuracy >= 0.4
+            and self.constraint_preservation >= 0.4
+        )
 
 
 class CounterexampleStatus(str, Enum):

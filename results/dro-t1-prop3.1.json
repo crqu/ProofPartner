@@ -1,0 +1,33 @@
+{
+  "experiment_id": 10,
+  "theorem": "DRO Proposition 3.1 (T=1 specialization)",
+  "statement_latex": "Let $(X, d_X)$ be a compact metric space, $k \\geq 1$, $p \\geq 1$. Let $g : X \\times \\mathbb{R}^k \\to \\mathbb{R}^k$ be $L_x$-Lipschitz in $x$ uniformly over $\\varepsilon$: $\\|g(x, \\varepsilon) - g(y, \\varepsilon)\\|_p \\leq L_x \\cdot d_X(x, y)$ for all $x, y \\in X$, $\\varepsilon \\in \\mathbb{R}^k$. Let $\\mu$ be a probability measure on $\\mathbb{R}^k$. Define $P_x = g(x, \\cdot)_{\\#}\\mu$. Then $\\int \\|g(x, \\omega) - g(y, \\omega)\\|_p \\, d\\mu(\\omega) \\leq L_x \\cdot d_X(x, y)$.",
+  "statement_nl": "Let (X, d_X) be a compact metric space and let k >= 1, p >= 1. Let g : X × R^k → R^k be a function that is L_x-Lipschitz in its first argument uniformly over the second argument: ||g(x, ε) - g(y, ε)||_p <= L_x · d_X(x, y) for all x, y in X and all ε in R^k. Let μ be a probability measure on R^k (independent of x). For each x in X, define P_x as the pushforward measure g(x, ·)#μ. Then the integral ∫ ||g(x, ω) - g(y, ω)||_p dμ(ω) <= L_x · d_X(x, y) for all x, y in X.",
+  "lean_formalization": null,
+  "compilation_status": "failure",
+  "compilation_errors": [
+    "UniformLipschitz type could not be formalized — all 6 candidates (3 per round × 2 rounds) failed Lean type-checking after 5 repair iterations each",
+    "Round 1: best auction score 0.136 (threshold 0.3), verdict=retry",
+    "Round 2: best auction score 0.144 (threshold 0.3), verdict=retry",
+    "Pipeline used mock lean_search backend — no real Mathlib API lookup available"
+  ],
+  "proof_status": "not_attempted",
+  "proof_tactics": null,
+  "cost_usd": 0.1403,
+  "model": "claude-sonnet-4@20250514",
+  "vertex_project": "itpc-gcp-ai-eng-claude",
+  "pipeline_stages": {
+    "type_planner": {"status": "success", "candidates": 7, "new_types": 1, "tokens": 1871},
+    "lemma_planner": {"status": "success", "lemmas": 5, "types_covered": 1, "tokens": 872},
+    "auctioneer_round_1": {"status": "retry", "candidates": 3, "best_score": 0.136, "threshold": 0.3},
+    "auctioneer_round_2": {"status": "retry", "candidates": 3, "best_score": 0.144, "threshold": 0.3}
+  },
+  "mathlib_imports_used": [],
+  "mathlib_gaps_found": [
+    "UniformLipschitz — no direct Mathlib structure for uniform Lipschitz continuity of parameterized functions over a second argument",
+    "Pushforward measure integral bound — Lean 4 formalization of ∫ ||g(x,ω) - g(y,ω)||_p dμ(ω) requires combining LipschitzWith, MeasureTheory.lintegral, and EuclideanSpace norms in ways the LLM could not resolve within 5 iterations"
+  ],
+  "run_timestamp": "2026-07-08T03:54:36Z",
+  "duration_seconds": 43,
+  "notes": "T=1 specialization avoids multi-period coupling but still hits the same Mathlib gap as the full proposition: no ready-made structure for 'Lipschitz in first argument uniformly over second'. The pushforward-integral reformulation (avoiding Wasserstein) did not help — the bottleneck is the type formalization, not the statement shape."
+}

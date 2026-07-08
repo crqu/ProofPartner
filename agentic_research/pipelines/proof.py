@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import time
 
-from collections import Counter
-
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
 from agentic_research.agents.lemma_breakdown import LemmaBreakdown
@@ -138,6 +136,14 @@ class ProofPipeline:
                     )
                     if not passed:
                         log.warning("proof_pipeline_claim_check_failed_corrected")
+                        return ProofPipelineResult(
+                            statement=lean_statement,
+                            search_result=corrected_result,
+                            claim_check_passed=False,
+                            failure_stage="claim_check",
+                            failure_reason="Claim check failed on corrected proof",
+                            total_token_usage=self._total_tokens,
+                        )
                     else:
                         log.info("proof_pipeline_corrected_success")
                         return ProofPipelineResult(
@@ -366,7 +372,13 @@ class ProofPipeline:
         if search_result.failure_reason and "timeout" in search_result.failure_reason.lower():
             return None
 
-        last_proof = statement
+        last_proof = search_result.proof_code
+        if not last_proof and search_result.strategies_tried:
+            last_strategy = search_result.strategies_tried[-1]
+            tactics = ", ".join(last_strategy.key_tactics) if last_strategy.key_tactics else "sorry"
+            last_proof = f"{statement} by {tactics}"
+        if not last_proof:
+            last_proof = statement
         error_msg = search_result.failure_reason or "Proof search exhausted all strategies"
 
         corrector = ProofCorrector(llm_client=self._llm)
@@ -377,10 +389,9 @@ class ProofPipeline:
         )
         self._accumulate_tokens(corrector.cumulative_tokens)
 
-        error_counts = Counter([correction.error_category.value])
         log.info(
-            "proof_corrector_category_distribution",
-            categories=dict(error_counts),
+            "proof_corrector_category",
+            category=correction.error_category.value,
         )
 
         if correction.error_category == ErrorCategory.TIMEOUT:
@@ -400,6 +411,12 @@ class ProofPipeline:
             f"Revised sketch:\n{correction.revised_proof_sketch}"
         )
 
+        augmented_task = (
+            f"{statement}\n\n"
+            f"[Correction context from previous failed attempt]\n"
+            f"{correction_hint}"
+        )
+
         agent = ProofSearchAgent(
             llm_client=self._llm,
             lean_repl=self._repl,
@@ -407,10 +424,7 @@ class ProofPipeline:
             prover_config=self._prover_config,
             max_strategies=self._max_strategies,
         )
-        ctx = AgentContext(
-            task=statement,
-            metadata={"correction_hint": correction_hint},
-        )
+        ctx = AgentContext(task=augmented_task)
         result = agent.run(ctx)
         self._accumulate_tokens(agent.cumulative_tokens)
         if result.result:

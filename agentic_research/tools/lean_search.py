@@ -89,6 +89,7 @@ class _LoogleBackend:
     def search(self, query: str, max_results: int, timeout: int) -> SearchResult:
         url = f"{self._url}?q={urllib.parse.quote(query)}"
         headers = dict(self._config.extra_headers)
+        headers['User-Agent'] = 'ProofPartner/1.0'
 
         req = urllib.request.Request(url, headers=headers, method="GET")
         try:
@@ -107,7 +108,7 @@ class _LoogleBackend:
                 SearchResultEntry(
                     name=hit.get("name", ""),
                     type_signature=hit.get("type", ""),
-                    doc_string=hit.get("doc", ""),
+                    doc_string=hit.get("doc") or "",
                     module=hit.get("module", ""),
                 )
             )

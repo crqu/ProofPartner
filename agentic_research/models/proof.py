@@ -121,6 +121,27 @@ class RecursiveProofResult(BaseModel):
     failure_reason: str | None = None
 
 
+class ErrorCategory(str, Enum):
+    TYPE_MISMATCH = "type_mismatch"
+    MISSING_IMPORT = "missing_import"
+    TACTIC_FAILURE = "tactic_failure"
+    UNIVERSE_LEVEL = "universe_level"
+    UNKNOWN_IDENTIFIER = "unknown_identifier"
+    TIMEOUT = "timeout"
+    OTHER = "other"
+
+
+class ProofCorrection(BaseModel):
+    """Structured correction for a failed proof attempt."""
+
+    error_category: ErrorCategory
+    error_message: str = Field(description="Original Lean error")
+    suggested_tactics: list[str] = Field(default_factory=list, description="Specific tactics to try")
+    revised_proof_sketch: str = Field(default="", description="Corrected proof code")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    reasoning: str = Field(default="", description="Why this fix should work")
+
+
 class ProofPipelineResult(BaseModel):
     """End-to-end result from the proof pipeline."""
 

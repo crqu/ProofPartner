@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import time
 
+from collections import Counter
+
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
 from agentic_research.agents.lemma_breakdown import LemmaBreakdown
 from agentic_research.agents.lemma_leanifier import LemmaLeanifier
 from agentic_research.agents.llm_client import LLMClient
+from agentic_research.agents.proof_corrector import ProofCorrector
 from agentic_research.agents.proof_search import ProofSearchAgent
 from agentic_research.agents.recursive_prover import RecursiveProver
 from agentic_research.logging import get_logger
@@ -22,7 +25,9 @@ from agentic_research.models.agents import AgentContext, AgentStatus, ProverConf
 from agentic_research.models.external_prover import ExternalProverConfig
 from agentic_research.models.formalization import ClaimCheckVerdict
 from agentic_research.models.proof import (
+    ErrorCategory,
     LemmaTree,
+    ProofCorrection,
     ProofPipelineResult,
     ProofSearchResult,
     RecursiveProofResult,
@@ -120,6 +125,39 @@ class ProofPipeline:
                 claim_check_passed=True,
                 total_token_usage=self._total_tokens,
             )
+
+        correction = self._try_proof_correction(lean_statement, search_result)
+        if correction is not None:
+            corrected_result = self._run_proof_search_with_correction(
+                lean_statement, correction
+            )
+            if corrected_result.proved and corrected_result.proof_code:
+                if self._use_claim_check:
+                    passed = self._run_claim_check(
+                        lean_statement, corrected_result.proof_code
+                    )
+                    if not passed:
+                        log.warning("proof_pipeline_claim_check_failed_corrected")
+                    else:
+                        log.info("proof_pipeline_corrected_success")
+                        return ProofPipelineResult(
+                            statement=lean_statement,
+                            proved=True,
+                            final_proof=corrected_result.proof_code,
+                            search_result=corrected_result,
+                            claim_check_passed=True,
+                            total_token_usage=self._total_tokens,
+                        )
+                else:
+                    log.info("proof_pipeline_corrected_success")
+                    return ProofPipelineResult(
+                        statement=lean_statement,
+                        proved=True,
+                        final_proof=corrected_result.proof_code,
+                        search_result=corrected_result,
+                        claim_check_passed=True,
+                        total_token_usage=self._total_tokens,
+                    )
 
         if not search_result.needs_decomposition:
             return ProofPipelineResult(
@@ -317,6 +355,71 @@ class ProofPipeline:
         if result.status == AgentStatus.SUCCESS and result.result:
             return result.result.get("final_proof")
         return None
+
+    def _try_proof_correction(
+        self, statement: str, search_result: ProofSearchResult
+    ) -> ProofCorrection | None:
+        """Invoke ProofCorrector if the search failed with compilation errors."""
+        if not search_result.strategies_tried:
+            return None
+
+        if search_result.failure_reason and "timeout" in search_result.failure_reason.lower():
+            return None
+
+        last_proof = statement
+        error_msg = search_result.failure_reason or "Proof search exhausted all strategies"
+
+        corrector = ProofCorrector(llm_client=self._llm)
+        correction = corrector.correct(
+            failed_proof=last_proof,
+            error_message=error_msg,
+            lean_goal_state=statement,
+        )
+        self._accumulate_tokens(corrector.cumulative_tokens)
+
+        error_counts = Counter([correction.error_category.value])
+        log.info(
+            "proof_corrector_category_distribution",
+            categories=dict(error_counts),
+        )
+
+        if correction.error_category == ErrorCategory.TIMEOUT:
+            log.info("proof_corrector_skip_timeout")
+            return None
+
+        return correction
+
+    def _run_proof_search_with_correction(
+        self, statement: str, correction: ProofCorrection
+    ) -> ProofSearchResult:
+        """Re-run proof search with correction context as additional hints."""
+        correction_hint = (
+            f"Previous attempt failed with {correction.error_category.value}: "
+            f"{correction.reasoning}\n"
+            f"Suggested tactics: {', '.join(correction.suggested_tactics)}\n"
+            f"Revised sketch:\n{correction.revised_proof_sketch}"
+        )
+
+        agent = ProofSearchAgent(
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            lean_search=self._search,
+            prover_config=self._prover_config,
+            max_strategies=self._max_strategies,
+        )
+        ctx = AgentContext(
+            task=statement,
+            metadata={"correction_hint": correction_hint},
+        )
+        result = agent.run(ctx)
+        self._accumulate_tokens(agent.cumulative_tokens)
+        if result.result:
+            return ProofSearchResult.model_validate(result.result)
+        return ProofSearchResult(
+            statement=statement,
+            needs_decomposition=True,
+            failure_reason="Corrected proof search returned no result",
+        )
 
     def _run_claim_check(self, statement: str, proof_code: str) -> bool:
         checker = ClaimCheck(llm_client=self._llm, use_llm_check=False)

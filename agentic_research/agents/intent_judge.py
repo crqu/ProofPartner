@@ -212,6 +212,9 @@ def _parse_path_verdict(
         concerns=[str(c) for c in concerns],
         confidence=float(parsed.get("confidence", 0.5)),
         reasoning=str(parsed.get("reasoning", "")),
+        type_fidelity=float(parsed.get("type_fidelity", 0.5)),
+        quantifier_accuracy=float(parsed.get("quantifier_accuracy", 0.5)),
+        constraint_preservation=float(parsed.get("constraint_preservation", 0.5)),
     )
 
 
@@ -233,9 +236,62 @@ def _adjudicate(path_verdicts: list[PathVerdict]) -> IntentVerdict:
         overall = IntentVerdictType.CORRECT
         notes_parts.append("All paths agree: formalization is correct")
 
+    dims = _aggregate_dimensions(path_verdicts)
+
+    log.info(
+        "intent_judge_verdict",
+        type_fidelity=dims["type_fidelity"],
+        quantifier_accuracy=dims["quantifier_accuracy"],
+        constraint_preservation=dims["constraint_preservation"],
+        overall_confidence=dims["overall_confidence"],
+        passes=dims["passes"],
+    )
+
     return IntentVerdict(
         overall_verdict=overall,
         path_verdicts=path_verdicts,
         adjudication_notes="; ".join(notes_parts),
         all_concerns=all_concerns,
+        type_fidelity=dims["type_fidelity"],
+        quantifier_accuracy=dims["quantifier_accuracy"],
+        constraint_preservation=dims["constraint_preservation"],
+        overall_confidence=dims["overall_confidence"],
     )
+
+
+def _aggregate_dimensions(
+    path_verdicts: list[PathVerdict],
+) -> dict[str, float | bool]:
+    total_weight = 0.0
+    tf_sum = 0.0
+    qa_sum = 0.0
+    cp_sum = 0.0
+
+    for pv in path_verdicts:
+        w = 1.5 if pv.path == VerificationPath.ADVERSARIAL else 1.0
+        total_weight += w
+        tf_sum += pv.type_fidelity * w
+        qa_sum += pv.quantifier_accuracy * w
+        cp_sum += pv.constraint_preservation * w
+
+    if total_weight == 0.0:
+        return {
+            "type_fidelity": 0.5,
+            "quantifier_accuracy": 0.5,
+            "constraint_preservation": 0.5,
+            "overall_confidence": 0.5,
+            "passes": False,
+        }
+
+    tf = tf_sum / total_weight
+    qa = qa_sum / total_weight
+    cp = cp_sum / total_weight
+    oc = (tf + qa + cp) / 3.0
+
+    return {
+        "type_fidelity": round(tf, 4),
+        "quantifier_accuracy": round(qa, 4),
+        "constraint_preservation": round(cp, 4),
+        "overall_confidence": round(oc, 4),
+        "passes": oc >= 0.6 and tf >= 0.4 and qa >= 0.4 and cp >= 0.4,
+    }

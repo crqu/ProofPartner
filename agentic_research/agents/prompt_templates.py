@@ -528,6 +528,12 @@ Think step by step:
    different quantification, wrong mathematical objects.
 4. Check for scope mismatches: is the formalization too narrow or too broad?
 
+## Dimension Scoring
+Score each of these dimensions from 0.0 to 1.0:
+- type_fidelity: Do the Lean 4 types correctly represent the mathematical concepts? (0=wrong types, 1=perfect)
+- quantifier_accuracy: Are universal/existential quantifiers correctly placed and scoped? (0=wrong, 1=perfect)
+- constraint_preservation: Are all hypotheses and constraints from the original statement preserved? (0=missing, 1=all present)
+
 ## Output Format
 Return a JSON object:
 ```json
@@ -535,7 +541,10 @@ Return a JSON object:
   "verdict": "correct" or "incorrect",
   "concerns": ["list of specific concerns, empty if correct"],
   "confidence": 0.0-1.0,
-  "reasoning": "step-by-step reasoning"
+  "reasoning": "step-by-step reasoning",
+  "type_fidelity": 0.0-1.0,
+  "quantifier_accuracy": 0.0-1.0,
+  "constraint_preservation": 0.0-1.0
 }}
 ```
 
@@ -569,6 +578,12 @@ Focus on:
    strengthening)?
 4. Do the types and structures align with the intended mathematical objects?
 
+## Dimension Scoring
+Score each of these dimensions from 0.0 to 1.0:
+- type_fidelity: Do the Lean 4 types correctly represent the mathematical concepts? (0=wrong types, 1=perfect)
+- quantifier_accuracy: Are universal/existential quantifiers correctly placed and scoped? (0=wrong, 1=perfect)
+- constraint_preservation: Are all hypotheses and constraints from the original statement preserved? (0=missing, 1=all present)
+
 ## Output Format
 Return a JSON object:
 ```json
@@ -576,7 +591,10 @@ Return a JSON object:
   "verdict": "correct" or "incorrect",
   "concerns": ["list of specific concerns, empty if correct"],
   "confidence": 0.0-1.0,
-  "reasoning": "detailed analysis of the Lean code vs the intent"
+  "reasoning": "detailed analysis of the Lean code vs the intent",
+  "type_fidelity": 0.0-1.0,
+  "quantifier_accuracy": 0.0-1.0,
+  "constraint_preservation": 0.0-1.0
 }}
 ```
 """
@@ -613,6 +631,12 @@ Actively search for:
 Be aggressive in finding problems. If the formalization is genuinely \
 correct, you may say so, but your default stance is skepticism.
 
+## Dimension Scoring
+Score each of these dimensions from 0.0 to 1.0:
+- type_fidelity: Do the Lean 4 types correctly represent the mathematical concepts? (0=wrong types, 1=perfect)
+- quantifier_accuracy: Are universal/existential quantifiers correctly placed and scoped? (0=wrong, 1=perfect)
+- constraint_preservation: Are all hypotheses and constraints from the original statement preserved? (0=missing, 1=all present)
+
 ## Output Format
 Return a JSON object:
 ```json
@@ -620,7 +644,10 @@ Return a JSON object:
   "verdict": "correct" or "incorrect",
   "concerns": ["specific concern 1", "specific concern 2"],
   "confidence": 0.0-1.0,
-  "reasoning": "adversarial analysis"
+  "reasoning": "adversarial analysis",
+  "type_fidelity": 0.0-1.0,
+  "quantifier_accuracy": 0.0-1.0,
+  "constraint_preservation": 0.0-1.0
 }}
 ```
 """

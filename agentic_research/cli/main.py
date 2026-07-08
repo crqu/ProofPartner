@@ -475,6 +475,94 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
     _print_cost_summary(cost_tracker, budget)
 
 
+@cli.command("research")
+@click.argument("idea")
+@click.option("--budget", type=float, default=20.00, help="Budget in USD (default: $20.00)")
+@click.option("--max-conjectures", type=int, default=5, help="Max conjectures to evaluate (default: 5)")
+@click.option("--max-refinements", type=int, default=3, help="Max refinement attempts per conjecture (default: 3)")
+@click.pass_context
+def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int) -> None:
+    """Run the full explore-conjecture-prove research loop.
+
+    Automatically explores the idea, generates conjectures, formalizes them
+    into Lean 4, checks for counterexamples, attempts proofs, and refines
+    on failure. Creates checkpoints at each stage for resumability.
+    """
+    from agentic_research.models.session import (
+        OrchestratorConfig,
+        PipelineStage,
+    )
+    from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+    if not click.confirm(
+        f"Full research loop. Budget: ${budget:.2f}. Continue?",
+        default=False,
+    ):
+        console.print("Aborted.")
+        return
+
+    try:
+        llm = _create_llm_client(model=ctx.obj.get("model"))
+        lean_repl = _create_lean_repl()
+        lean_search = _create_lean_search()
+    except Exception as e:
+        console.print(f"[red]Setup error:[/red] {e}")
+        sys.exit(1)
+
+    config = OrchestratorConfig(
+        budget_limit_usd=budget,
+        max_conjectures=max_conjectures,
+        max_refinements=max_refinements,
+    )
+
+    orchestrator = ResearchOrchestrator(
+        llm_client=llm,
+        lean_repl=lean_repl,
+        lean_search=lean_search,
+        config=config,
+    )
+
+    try:
+        with console.status(f"[bold]Researching:[/bold] {idea[:60]}...") as status:
+            result = orchestrator.run(idea)
+            status.update("[bold]Research complete.[/bold]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        result = orchestrator._build_result(idea)
+
+    if result.final_stage == PipelineStage.COMPLETE:
+        console.print("\n[green bold]RESEARCH COMPLETE[/green bold]")
+    else:
+        console.print("\n[yellow bold]RESEARCH INCOMPLETE[/yellow bold]")
+
+    stats_table = Table(title="Research Results", show_header=False)
+    stats_table.add_column("Metric", style="bold")
+    stats_table.add_column("Value")
+    stats_table.add_row("Stage reached", result.final_stage.value)
+    stats_table.add_row("Conjectures tried", str(result.total_conjectures_tried))
+    stats_table.add_row("Proofs attempted", str(result.total_refinements + len(result.proved_conjectures) + len(result.failed_conjectures)))
+    stats_table.add_row("Proofs succeeded", str(len(result.proved_conjectures)))
+    stats_table.add_row("Total cost", f"${result.cost_estimate.total_cost_usd:.4f}")
+    console.print(stats_table)
+
+    if result.proved_conjectures:
+        proved_table = Table(title="Proved Conjectures")
+        proved_table.add_column("Conjecture", style="cyan")
+        proved_table.add_column("Lean Statement", style="green")
+        for tc in result.proved_conjectures:
+            stmt = tc.conjecture.statement
+            if len(stmt) > 80:
+                stmt = stmt[:77] + "..."
+            lean = tc.lean_statement
+            if len(lean) > 80:
+                lean = lean[:77] + "..."
+            proved_table.add_row(stmt, lean)
+        console.print(proved_table)
+
+    console.print(f"\n[dim]Session: {result.session_id}[/dim]")
+    console.print(f"[dim]Resume with: agentic-research resume {result.session_id}[/dim]")
+
+
 @cli.command("status")
 def status_cmd() -> None:
     """Show current session state and cost summary."""

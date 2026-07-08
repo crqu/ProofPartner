@@ -38,7 +38,6 @@ from agentic_research.models.research import (
     ResearchDirection,
 )
 from agentic_research.models.session import (
-    ConjectureOutcome,
     OrchestratorConfig,
     PipelineStage,
 )

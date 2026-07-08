@@ -36,15 +36,6 @@ class SearchBackend(str, Enum):
     MOCK = "mock"
 
 
-@dataclass
-class SearchConfig:
-    backend: SearchBackend = SearchBackend.MOCK
-    max_results: int = 10
-    timeout_seconds: int = 30
-    api_url: str | None = None
-    extra_headers: dict[str, str] = field(default_factory=dict)
-
-
 def detect_search_backend() -> SearchBackend:
     try:
         import lean_dojo  # noqa: F401
@@ -52,6 +43,15 @@ def detect_search_backend() -> SearchBackend:
     except ImportError:
         pass
     return SearchBackend.MOOGLE
+
+
+@dataclass
+class SearchConfig:
+    backend: SearchBackend = field(default_factory=detect_search_backend)
+    max_results: int = 10
+    timeout_seconds: int = 30
+    api_url: str | None = None
+    extra_headers: dict[str, str] = field(default_factory=dict)
 
 
 class _MockSearchBackend:

@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from collections.abc import Callable
@@ -264,6 +265,47 @@ class LeanRepl(BaseTool):
             compilation_status=CompilationStatus.ERROR,
             error_message=result.error_message,
         )
+
+    def try_automated_tactics(
+        self,
+        theorem_statement: str,
+        imports: list[str] | None = None,
+        timeout_seconds: float = 5.0,
+    ) -> str | None:
+        """Try cheap automated tactics before LLM proof search.
+
+        Escalation chain: grind -> simp_all -> None (fall through to LLM).
+        Returns the successful tactic string or None.
+        """
+        import_block = "\n".join(f"import {imp}" for imp in (imports or []))
+        tactics = ["grind", "simp_all"]
+
+        for tactic in tactics:
+            code = f"{import_block}\n{theorem_statement} by {tactic}".strip()
+            log.info("try_automated_tactic", tactic=tactic)
+            start = time.monotonic()
+            result = self._backend.compile(code, int(timeout_seconds))
+            elapsed = time.monotonic() - start
+
+            if (
+                result.compilation_status == CompilationStatus.OK
+                and result.all_goals_closed
+            ):
+                log.info(
+                    "automated_tactic_success",
+                    tactic=tactic,
+                    elapsed_seconds=round(elapsed, 3),
+                )
+                return tactic
+
+            log.debug(
+                "automated_tactic_failed",
+                tactic=tactic,
+                status=result.compilation_status.value,
+                elapsed_seconds=round(elapsed, 3),
+            )
+
+        return None
 
     def _run(self, input_data: Any) -> CompilationResult:
         code = str(input_data)

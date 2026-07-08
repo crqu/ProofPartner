@@ -1,0 +1,43 @@
+{
+  "experiment_id": 12,
+  "theorem": "DRO Proposition 3.1 (T=1 specialization) — v2 with improved type planner",
+  "type_planner_fix_applied": true,
+  "statement_nl": "Let (X, d_X) be a compact metric space and let k >= 1, p >= 1. Let g : X × R^k → R^k be a function that is L_x-Lipschitz in its first argument uniformly over the second argument: ||g(x, ε) - g(y, ε)||_p <= L_x · d_X(x, y) for all x, y in X and all ε in R^k. Let μ be a probability measure on R^k (independent of x). For each x in X, define P_x as the pushforward measure g(x, ·)#μ. Then the integral ∫ ||g(x, ω) - g(y, ω)||_p dμ(ω) <= L_x · d_X(x, y) for all x, y in X.",
+  "lean_formalization": null,
+  "compilation_status": "failure",
+  "compilation_errors": [
+    "Type 'UniformLipschitzInFirst' does not exist in Mathlib — all 6 candidates across 2 auction rounds failed to compile",
+    "Best score was 0.139, below the 0.3 acceptance threshold"
+  ],
+  "proof_status": "not_attempted",
+  "cost_usd": 0.1408,
+  "types_created": ["UniformLipschitzInFirst"],
+  "composition_alternatives_used": [],
+  "mathlib_imports_used": [],
+  "comparison_to_v1": "The type planner prompt fix (commit 52f639b) changed the invented type name from 'UniformLipschitz' (v1) to 'UniformLipschitzInFirst' (v2), showing the model engaged with the prompt instruction about Lipschitz concepts. However, it still created a new type rather than using the composition '∀ ε, LipschitzWith L_x (fun x => g x ε)' as the prompt explicitly suggested. Root cause: (1) the LLM ignores the composition instruction despite explicit examples, and (2) the pipeline code (formalization.py:176) has no logic to prefer composition_alternative over new type creation — it simply filters to is_in_mathlib=false types and tries to formalize them.",
+  "pipeline_details": {
+    "type_planner_result": {
+      "num_candidates": 1,
+      "num_new_types": 1,
+      "type_name": "UniformLipschitzInFirst"
+    },
+    "lemma_planner_result": {
+      "total_lemmas": 5,
+      "types_covered": 1
+    },
+    "auction_rounds": 2,
+    "candidates_per_round": 3,
+    "total_candidates_tried": 6,
+    "all_candidates_compiled": false,
+    "best_score": 0.139,
+    "acceptance_threshold": 0.3,
+    "model": "claude-sonnet-4@20250514",
+    "budget": 5.00,
+    "cost_velocity_exceeded": true
+  },
+  "next_steps": [
+    "Add pipeline logic to use composition_alternative when available — skip new type creation entirely if composition_alternative is non-null",
+    "Strengthen the type planner prompt: if composition_alternative is provided, set is_in_mathlib=true to prevent the pipeline from trying to formalize the type",
+    "Consider a two-pass approach: first ask the model for composition alternatives, then only create new types if no composition works"
+  ]
+}

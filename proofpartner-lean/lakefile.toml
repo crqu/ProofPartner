@@ -1,0 +1,7 @@
+name = "ProofPartner"
+version = "0.1.0"
+keywords = ["math"]
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"

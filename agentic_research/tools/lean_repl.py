@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from agentic_research.logging import get_logger
@@ -125,10 +126,55 @@ class _MockBackend:
 
 
 class _SubprocessBackend:
+    _LAKE_PROJECT_DIR = Path(__file__).parent.parent.parent / "proofpartner-lean"
+
     def __init__(self, config: ReplConfig) -> None:
         self._config = config
+        self._lake_available: bool | None = None
 
-    def compile(self, code: str, timeout: int) -> CompilationResult:
+    def has_lake_project(self) -> bool:
+        if self._lake_available is None:
+            lakefile = self._LAKE_PROJECT_DIR / "lakefile.toml"
+            has_lakefile = lakefile.is_file()
+            has_lake_binary = shutil.which("lake") is not None
+            self._lake_available = has_lakefile and has_lake_binary
+            log.info(
+                "lake_project_check",
+                path=str(self._LAKE_PROJECT_DIR),
+                has_lakefile=has_lakefile,
+                has_lake_binary=has_lake_binary,
+                available=self._lake_available,
+            )
+        return self._lake_available
+
+    def _compile_with_lake(self, code: str, timeout: int) -> CompilationResult:
+        lean_dir = self._LAKE_PROJECT_DIR / "ProofPartner"
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".lean", dir=str(lean_dir), delete=False
+        )
+        try:
+            tmp.write(code)
+            tmp.close()
+            rel_path = os.path.relpath(tmp.name, str(self._LAKE_PROJECT_DIR))
+            cmd = ["lake", "env", "lean", rel_path] + self._config.extra_args
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(self._LAKE_PROJECT_DIR),
+            )
+            return self._parse_result(proc)
+        except subprocess.TimeoutExpired:
+            return CompilationResult(
+                status=ToolStatus.TIMEOUT,
+                compilation_status=CompilationStatus.TIMEOUT,
+                error_message=f"Lean compilation timed out after {timeout}s",
+            )
+        finally:
+            os.unlink(tmp.name)
+
+    def _compile_bare(self, code: str, timeout: int) -> CompilationResult:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".lean", delete=False, dir=self._config.working_dir
         ) as f:
@@ -149,24 +195,7 @@ class _SubprocessBackend:
                 env=env,
                 cwd=self._config.working_dir,
             )
-            stdout = proc.stdout or ""
-            stderr = proc.stderr or ""
-            combined = f"{stdout}\n{stderr}".strip()
-
-            errors, warnings = _parse_lean_errors(combined)
-            goals = _parse_goals(combined)
-            comp_status = CompilationStatus.OK if proc.returncode == 0 else CompilationStatus.ERROR
-            all_closed = comp_status == CompilationStatus.OK and not goals
-
-            return CompilationResult(
-                status=ToolStatus.SUCCESS,
-                compilation_status=comp_status,
-                errors=errors,
-                warnings=warnings,
-                goals=goals,
-                lean_output=combined,
-                all_goals_closed=all_closed,
-            )
+            return self._parse_result(proc)
         except subprocess.TimeoutExpired:
             return CompilationResult(
                 status=ToolStatus.TIMEOUT,
@@ -175,6 +204,32 @@ class _SubprocessBackend:
             )
         finally:
             os.unlink(tmp_path)
+
+    @staticmethod
+    def _parse_result(proc: subprocess.CompletedProcess[str]) -> CompilationResult:
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        combined = f"{stdout}\n{stderr}".strip()
+
+        errors, warnings = _parse_lean_errors(combined)
+        goals = _parse_goals(combined)
+        comp_status = CompilationStatus.OK if proc.returncode == 0 else CompilationStatus.ERROR
+        all_closed = comp_status == CompilationStatus.OK and not goals
+
+        return CompilationResult(
+            status=ToolStatus.SUCCESS,
+            compilation_status=comp_status,
+            errors=errors,
+            warnings=warnings,
+            goals=goals,
+            lean_output=combined,
+            all_goals_closed=all_closed,
+        )
+
+    def compile(self, code: str, timeout: int) -> CompilationResult:
+        if self.has_lake_project():
+            return self._compile_with_lake(code, timeout)
+        return self._compile_bare(code, timeout)
 
 
 class _LeanDojoBackend:

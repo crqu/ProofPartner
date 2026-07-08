@@ -2,7 +2,7 @@
 
 Supports multiple backends:
   1. LeanDojo premise retrieval (when installed)
-  2. Moogle / LeanSearch web API (HTTP fallback)
+  2. Loogle web API (HTTP fallback)
   3. Mock mode for testing
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from enum import Enum
@@ -26,23 +27,14 @@ from agentic_research.tools.base import BaseTool
 
 log = get_logger(__name__)
 
-MOOGLE_API_URL = "https://www.moogle.ai/api/search"
+LOOGLE_API_URL = "https://loogle.lean-lang.org/json"
 LEANSEARCH_API_URL = "https://leansearch.net/api/search"
 
 
 class SearchBackend(str, Enum):
     LEAN_DOJO = "lean_dojo"
-    MOOGLE = "moogle"
+    LOOGLE = "loogle"
     MOCK = "mock"
-
-
-@dataclass
-class SearchConfig:
-    backend: SearchBackend = SearchBackend.MOCK
-    max_results: int = 10
-    timeout_seconds: int = 30
-    api_url: str | None = None
-    extra_headers: dict[str, str] = field(default_factory=dict)
 
 
 def detect_search_backend() -> SearchBackend:
@@ -51,7 +43,16 @@ def detect_search_backend() -> SearchBackend:
         return SearchBackend.LEAN_DOJO
     except ImportError:
         pass
-    return SearchBackend.MOOGLE
+    return SearchBackend.LOOGLE
+
+
+@dataclass
+class SearchConfig:
+    backend: SearchBackend = field(default_factory=detect_search_backend)
+    max_results: int = 10
+    timeout_seconds: int = 30
+    api_url: str | None = None
+    extra_headers: dict[str, str] = field(default_factory=dict)
 
 
 class _MockSearchBackend:
@@ -80,17 +81,17 @@ class _MockSearchBackend:
         )
 
 
-class _MoogleBackend:
+class _LoogleBackend:
     def __init__(self, config: SearchConfig) -> None:
         self._config = config
-        self._url = config.api_url or MOOGLE_API_URL
+        self._url = config.api_url or LOOGLE_API_URL
 
     def search(self, query: str, max_results: int, timeout: int) -> SearchResult:
-        payload = json.dumps({"query": query, "num_results": max_results}).encode()
-        headers = {"Content-Type": "application/json"}
-        headers.update(self._config.extra_headers)
+        url = f"{self._url}?q={urllib.parse.quote(query)}"
+        headers = dict(self._config.extra_headers)
+        headers['User-Agent'] = 'ProofPartner/1.0'
 
-        req = urllib.request.Request(self._url, data=payload, headers=headers, method="POST")
+        req = urllib.request.Request(url, headers=headers, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode())
@@ -98,18 +99,17 @@ class _MoogleBackend:
             return SearchResult(
                 status=ToolStatus.ERROR,
                 query=query,
-                error_message=f"Moogle API error: {exc}",
+                error_message=f"Loogle API error: {exc}",
             )
 
         entries: list[SearchResultEntry] = []
-        for hit in data.get("data", [])[:max_results]:
+        for hit in data.get("hits", [])[:max_results]:
             entries.append(
                 SearchResultEntry(
                     name=hit.get("name", ""),
                     type_signature=hit.get("type", ""),
-                    doc_string=hit.get("doc", ""),
+                    doc_string=hit.get("doc") or "",
                     module=hit.get("module", ""),
-                    relevance_score=float(hit.get("score", 0.0)),
                 )
             )
 
@@ -117,7 +117,7 @@ class _MoogleBackend:
             status=ToolStatus.SUCCESS,
             query=query,
             entries=entries,
-            total_results=len(entries),
+            total_results=data.get("count", len(entries)),
             truncated=len(entries) >= max_results,
         )
 
@@ -165,11 +165,11 @@ class _LeanDojoSearchBackend:
             )
 
 
-_SearchBackendImpl = _MockSearchBackend | _MoogleBackend | _LeanDojoSearchBackend
+_SearchBackendImpl = _MockSearchBackend | _LoogleBackend | _LeanDojoSearchBackend
 
 _BACKENDS: dict[SearchBackend, Callable[[SearchConfig], _SearchBackendImpl]] = {
     SearchBackend.MOCK: lambda cfg: _MockSearchBackend(),
-    SearchBackend.MOOGLE: lambda cfg: _MoogleBackend(cfg),
+    SearchBackend.LOOGLE: lambda cfg: _LoogleBackend(cfg),
     SearchBackend.LEAN_DOJO: lambda cfg: _LeanDojoSearchBackend(),
 }
 
@@ -183,7 +183,7 @@ class LeanSearch(BaseTool):
         if config is None:
             config = SearchConfig()
         self._config = config
-        self._backend: _MockSearchBackend | _MoogleBackend | _LeanDojoSearchBackend = _BACKENDS[config.backend](config)
+        self._backend: _MockSearchBackend | _LoogleBackend | _LeanDojoSearchBackend = _BACKENDS[config.backend](config)
         log.info("lean_search_init", backend=config.backend.value)
 
     @property

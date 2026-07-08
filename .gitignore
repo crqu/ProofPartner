@@ -6,3 +6,5 @@ build/
 .pytest_cache/
 data/benchmarks/
 *.egg
+proofpartner-lean/.lake/
+proofpartner-lean/lake-manifest.json

@@ -32,17 +32,29 @@ def test_lean_toolchain_exists():
     assert content.startswith("leanprover/lean4:")
 
 
-def test_scratch_file_exists():
-    """The scratch Lean file for REPL compilation exists."""
-    scratch = LAKE_PROJECT / "ProofPartner" / "Scratch.lean"
-    assert scratch.is_file(), f"Missing {scratch}"
+def test_compile_uses_temp_file():
+    """_compile_with_lake uses a unique temp file, not shared Scratch.lean."""
+    config = ReplConfig(backend=ReplBackend.SUBPROCESS)
+    backend = _SubprocessBackend(config)
+    lean_dir = LAKE_PROJECT / "ProofPartner"
+    before = set(lean_dir.glob("*.lean"))
+    # After _compile_with_lake (mocked subprocess), no new .lean files should remain
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("P", (), {
+            "stdout": "", "stderr": "", "returncode": 0,
+        })()
+        backend._lake_available = True
+        backend._compile_with_lake("-- test", timeout=10)
+    after = set(lean_dir.glob("*.lean"))
+    assert before == after, "Temp file was not cleaned up"
 
 
 def test_subprocess_backend_detects_lake_project():
-    """_SubprocessBackend.has_lake_project() returns True when lake project exists."""
+    """_SubprocessBackend.has_lake_project() returns True when lakefile and lake binary exist."""
     config = ReplConfig(backend=ReplBackend.SUBPROCESS)
     backend = _SubprocessBackend(config)
-    assert backend.has_lake_project() is True
+    with patch("shutil.which", return_value="/usr/bin/lake"):
+        assert backend.has_lake_project() is True
 
 
 def test_subprocess_backend_fallback_without_lake_project():
@@ -51,6 +63,15 @@ def test_subprocess_backend_fallback_without_lake_project():
     backend = _SubprocessBackend(config)
     fake_path = Path("/nonexistent/proofpartner-lean")
     with patch.object(type(backend), "_LAKE_PROJECT_DIR", fake_path):
+        backend._lake_available = None
+        assert backend.has_lake_project() is False
+
+
+def test_subprocess_backend_fallback_without_lake_binary():
+    """When lake binary is missing, has_lake_project() returns False."""
+    config = ReplConfig(backend=ReplBackend.SUBPROCESS)
+    backend = _SubprocessBackend(config)
+    with patch("shutil.which", return_value=None):
         backend._lake_available = None
         assert backend.has_lake_project() is False
 

@@ -135,20 +135,28 @@ class _SubprocessBackend:
     def has_lake_project(self) -> bool:
         if self._lake_available is None:
             lakefile = self._LAKE_PROJECT_DIR / "lakefile.toml"
-            self._lake_available = lakefile.is_file()
+            has_lakefile = lakefile.is_file()
+            has_lake_binary = shutil.which("lake") is not None
+            self._lake_available = has_lakefile and has_lake_binary
             log.info(
                 "lake_project_check",
                 path=str(self._LAKE_PROJECT_DIR),
+                has_lakefile=has_lakefile,
+                has_lake_binary=has_lake_binary,
                 available=self._lake_available,
             )
         return self._lake_available
 
     def _compile_with_lake(self, code: str, timeout: int) -> CompilationResult:
-        scratch = self._LAKE_PROJECT_DIR / "ProofPartner" / "Scratch.lean"
-        scratch.write_text(code)
-
+        lean_dir = self._LAKE_PROJECT_DIR / "ProofPartner"
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".lean", dir=str(lean_dir), delete=False
+        )
         try:
-            cmd = ["lake", "env", "lean", "ProofPartner/Scratch.lean"] + self._config.extra_args
+            tmp.write(code)
+            tmp.close()
+            rel_path = os.path.relpath(tmp.name, str(self._LAKE_PROJECT_DIR))
+            cmd = ["lake", "env", "lean", rel_path] + self._config.extra_args
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -163,6 +171,8 @@ class _SubprocessBackend:
                 compilation_status=CompilationStatus.TIMEOUT,
                 error_message=f"Lean compilation timed out after {timeout}s",
             )
+        finally:
+            os.unlink(tmp.name)
 
     def _compile_bare(self, code: str, timeout: int) -> CompilationResult:
         with tempfile.NamedTemporaryFile(

@@ -27,6 +27,10 @@ class TypeCandidate(BaseModel):
         default=False,
         description="Whether this type already exists in Mathlib",
     )
+    composition_alternative: str | None = Field(
+        default=None,
+        description="How to express this using existing Mathlib types + quantifiers, or null if genuinely new",
+    )
 
 
 class TypeDependencyGraph(BaseModel):

@@ -243,6 +243,19 @@ analyze a mathematical conjecture and identify which types (structures, \
 definitions, or concepts) are needed beyond what Lean 4 and Mathlib already \
 provide.
 
+## Key Mathlib Types (prefer these over new definitions)
+- LipschitzWith K f : f is K-Lipschitz (Mathlib.Topology.MetricSpace.Lipschitz)
+- Continuous f : f is continuous (Mathlib.Topology.Basic)
+- Measurable f : f is measurable (Mathlib.MeasureTheory.MeasurableSpace.Basic)
+- MeasureTheory.IsProbabilityMeasure μ : μ is a probability measure
+- MeasureTheory.Measure.map f μ : pushforward measure f_#μ
+- CompactSpace X : X is compact (Mathlib.Topology.Compactness.Compact)
+- MetricSpace X : X has a metric (Mathlib.Topology.MetricSpace.Basic)
+- EuclideanSpace ℝ (Fin n) : ℝ^n (Mathlib.Analysis.InnerProductSpace.EuclideanDist)
+
+When a concept can be expressed by quantifying over one of these types, DO NOT \
+invent a new type. Use the existing type with ∀ or ∃.
+
 ## Output Format
 Return a JSON object with this exact structure:
 ```json
@@ -254,7 +267,8 @@ Return a JSON object with this exact structure:
       "lean_signature": "proposed Lean 4 signature sketch",
       "depends_on": ["OtherType"],
       "mathlib_analog": "closest Mathlib type or null",
-      "is_in_mathlib": false
+      "is_in_mathlib": false,
+      "composition_alternative": "how to express this using existing Mathlib types + quantifiers, or null if genuinely new"
     }}
   ],
   "dependency_graph": {{
@@ -266,6 +280,14 @@ Return a JSON object with this exact structure:
 ```
 
 ## Guidelines
+- **CRITICAL: Prefer existing Mathlib types composed with quantifiers over new definitions.**
+  Instead of defining a new type, express the concept using existing Mathlib types with ∀/∃ quantifiers.
+  Examples:
+  • 'f is Lipschitz in x uniformly over y' → use `∀ y, LipschitzWith K (fun x => f x y)`, NOT a new `UniformLipschitz` type
+  • 'f is continuous in each variable separately' → use `∀ y, Continuous (fun x => f x y)`, NOT a new `SeparatelyContinuous` type
+  • 'f is measurable with respect to product sigma-algebra' → use `Measurable f` with appropriate instances, NOT a new type
+  Only mark is_in_mathlib=false and define a new type if NO combination of existing Mathlib types + quantifiers can express the concept.
+- If composition_alternative is non-null, reconsider whether a new type is actually needed — prefer the composition.
 - List types in topological order (dependencies first)
 - Mark types that already exist in Mathlib with is_in_mathlib=true
 - Include Mathlib imports needed for existing types

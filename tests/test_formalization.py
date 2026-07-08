@@ -239,6 +239,7 @@ MOCK_TYPE_PLAN_RESPONSE = json.dumps({
             "depends_on": [],
             "mathlib_analog": None,
             "is_in_mathlib": False,
+            "composition_alternative": None,
         },
     ],
     "dependency_graph": {
@@ -346,6 +347,72 @@ class TestTypePlanner:
         search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
         planner = TypePlanner(llm_client=llm, lean_search=search)
         assert planner.name == "type_planner"
+
+    def test_composition_alternative_field(self):
+        """Test that TypeCandidate accepts composition_alternative field."""
+        from agentic_research.agents.type_planner import TypePlanner
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        # Mock response suggesting composition over new type
+        response = json.dumps({
+            "candidates": [
+                {
+                    "name": "UniformLipschitz",
+                    "informal_description": "f is Lipschitz in x uniformly over y",
+                    "lean_signature": "structure UniformLipschitz where",
+                    "depends_on": [],
+                    "mathlib_analog": "LipschitzWith",
+                    "is_in_mathlib": False,
+                    "composition_alternative": "∀ y, LipschitzWith K (fun x => f x y)",
+                },
+            ],
+            "dependency_graph": {"edges": [], "topological_order": []},
+            "mathlib_imports": ["Mathlib.Topology.MetricSpace.Lipschitz"],
+        })
+
+        llm = _make_mock_llm([response])
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+        planner = TypePlanner(llm_client=llm, lean_search=search)
+        ctx = AgentContext(task="f is L-Lipschitz in x uniformly over y")
+        result = planner.run(ctx)
+
+        assert result.status == AgentStatus.SUCCESS
+        plan = TypePlan.model_validate(result.result)
+        assert len(plan.candidates) == 1
+        assert plan.candidates[0].composition_alternative == "∀ y, LipschitzWith K (fun x => f x y)"
+
+    def test_genuinely_new_type_null_composition(self):
+        """Test that genuinely new types have null composition_alternative."""
+        from agentic_research.agents.type_planner import TypePlanner
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        # Mock response for genuinely new type
+        response = json.dumps({
+            "candidates": [
+                {
+                    "name": "QuasiRandomGraph",
+                    "informal_description": "A graph with quasi-random properties",
+                    "lean_signature": "structure QuasiRandomGraph where",
+                    "depends_on": [],
+                    "mathlib_analog": None,
+                    "is_in_mathlib": False,
+                    "composition_alternative": None,
+                },
+            ],
+            "dependency_graph": {"edges": [], "topological_order": []},
+            "mathlib_imports": [],
+        })
+
+        llm = _make_mock_llm([response])
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+        planner = TypePlanner(llm_client=llm, lean_search=search)
+        ctx = AgentContext(task="quasi-random graphs")
+        result = planner.run(ctx)
+
+        assert result.status == AgentStatus.SUCCESS
+        plan = TypePlan.model_validate(result.result)
+        assert len(plan.candidates) == 1
+        assert plan.candidates[0].composition_alternative is None
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Quickstart
 
-Get from zero to your first conjecture in 5 minutes.
+Get from zero to your first conjecture in 5 minutes. For a narrative walkthrough of a complete research session, see [TUTORIAL.md](TUTORIAL.md).
 
 ## 1. Install
 
@@ -90,7 +90,11 @@ Shows your session's conjecture history, proof outcomes, and memory tier usage.
 
 ## Next Steps
 
-- See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline description and agent inventory
+- **[Tutorial](TUTORIAL.md)** — narrative walkthrough of a complete research session (~30 min)
+- **[API Guide](API.md)** — use ProofPartner as a Python library in Jupyter notebooks or batch scripts
+- **[Architecture](ARCHITECTURE.md)** — full pipeline description and agent inventory
+- **[Reproducibility](REPRODUCIBILITY.md)** — model versions, cost estimates, hardware requirements
+- **[FAQ](FAQ.md)** — common questions and troubleshooting
 - Run `agentic-research --help` for all CLI options
 - Install [elan](https://github.com/leanprover/elan) for real Lean 4 proof verification (without it, Lean operations use mocked backends)
 - Set `AGENTIC_RESEARCH_MODEL` to use a different Claude model

@@ -1,0 +1,70 @@
+cff-version: 1.2.0
+message: "If you use ProofPartner in your research, please cite it as below."
+title: "ProofPartner: An Agentic Mathematical Research Partner"
+type: software
+version: 0.1.0
+date-released: "2026-07-09"
+license: MIT
+url: "https://github.com/crqu/ProofPartner"
+repository-code: "https://github.com/crqu/ProofPartner"
+keywords:
+  - formal mathematics
+  - theorem proving
+  - Lean 4
+  - conjecture generation
+  - automated formalization
+  - agentic AI
+authors:
+  - family-names: Qu
+    given-names: Chengrui
+    email: qcrpku@gmail.com
+references:
+  - type: article
+    title: "Beyond the Library: An Agentic Framework for Autoformalizing Research Mathematics"
+    authors:
+      - family-names: Soltani Moakhar
+        given-names: Arshia
+      - family-names: Gholami
+        given-names: Iman
+      - family-names: Springer
+        given-names: Max
+      - family-names: JafariRaviz
+        given-names: Mahdi
+      - family-names: Hajiaghayi
+        given-names: MohammadTaghi
+    year: 2026
+    url: "https://arxiv.org/abs/2606.31134"
+    notes: "ProofPartner adapts the type-first formalization framework and auxiliary lemma validation technique from this work."
+  - type: article
+    title: "LeanDojo: Theorem Proving with Retrieval-Augmented Language Models"
+    authors:
+      - family-names: Yang
+        given-names: Kaiyu
+      - family-names: Swope
+        given-names: Aidan
+      - family-names: Gu
+        given-names: Alex
+      - family-names: Chalamala
+        given-names: Rahul
+      - family-names: Song
+        given-names: Peiyang
+      - family-names: Yu
+        given-names: Shixing
+      - family-names: Godil
+        given-names: Saad
+      - family-names: Prenger
+        given-names: Ryan
+      - family-names: Anandkumar
+        given-names: Anima
+    year: 2023
+    collection-title: "Advances in Neural Information Processing Systems (NeurIPS)"
+  - type: dataset
+    title: "miniF2F: A Cross-System Benchmark for Formal Olympiad-Level Mathematics"
+    authors:
+      - family-names: Zheng
+        given-names: Kunhao
+      - family-names: Han
+        given-names: Jesse Michael
+      - family-names: Polu
+        given-names: Stanislas
+    year: 2022

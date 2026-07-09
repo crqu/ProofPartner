@@ -84,7 +84,8 @@ class FlattenFinalize(BaseAgent):
         assembled_code = _extract_lean_code(response.content)
         compilation = self._repl.execute(assembled_code)
 
-        if compilation.compilation_status == CompilationStatus.OK and compilation.all_goals_closed:
+        uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
+        if compilation.compilation_status == CompilationStatus.OK and compilation.all_goals_closed and not uses_sorry:
             log.info("flatten_finalize_success")
             return AgentResult(
                 agent_name=self.name,

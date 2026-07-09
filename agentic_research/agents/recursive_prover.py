@@ -245,7 +245,8 @@ class RecursiveProver(BaseAgent):
         proof_code = _extract_lean_code(response.content)
         compilation = self._repl.execute(proof_code)
 
-        if compilation.compilation_status == CompilationStatus.OK:
+        uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
+        if compilation.compilation_status == CompilationStatus.OK and not uses_sorry:
             node.proof_code = proof_code
             return True
 

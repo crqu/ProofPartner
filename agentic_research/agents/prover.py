@@ -98,7 +98,8 @@ class IterativeProver(BaseAgent):
             proof_code = _extract_lean_code(llm_response.content)
             compilation = self._repl.execute(proof_code)
 
-            if compilation.compilation_status == CompilationStatus.OK and compilation.all_goals_closed:
+            uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
+            if compilation.compilation_status == CompilationStatus.OK and compilation.all_goals_closed and not uses_sorry:
                 attempt = ProofAttempt(
                     iteration=iteration,
                     proof_code=proof_code,

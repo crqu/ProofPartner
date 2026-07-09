@@ -106,7 +106,7 @@ agentic_research/
 ├── orchestrator/  # State machine, checkpointing, cost tracking
 ├── pipelines/     # Multi-agent pipelines (formalization, proof, refinement)
 └── tools/         # Lean 4 integration (REPL, search, lookup)
-tests/             # Test files (~586 tests)
+tests/             # Test files (~599 tests)
 docs/              # Documentation
 ```
 

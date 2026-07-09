@@ -434,6 +434,67 @@ class TestPromptTemplates:
         assert "omega" in LEAN4_PROVER_SYSTEM
         assert "Mathlib" in LEAN4_PROVER_SYSTEM
 
+    def test_type_planner_has_fewshot_examples(self):
+        from agentic_research.agents.prompt_templates import TYPE_PLANNER_SYSTEM
+
+        assert "Few-Shot Examples" in TYPE_PLANNER_SYSTEM
+        assert "MeasureTheory.Measure" in TYPE_PLANNER_SYSTEM
+        assert "MeasureTheory.integral" in TYPE_PLANNER_SYSTEM
+        assert "IsProbabilityMeasure" in TYPE_PLANNER_SYSTEM
+        assert "Integrable" in TYPE_PLANNER_SYSTEM
+
+    def test_type_planner_fewshot_metric_ball(self):
+        from agentic_research.agents.prompt_templates import TYPE_PLANNER_SYSTEM
+
+        assert "EMetric.ball" in TYPE_PLANNER_SYSTEM
+        assert "Metric.ball" in TYPE_PLANNER_SYSTEM
+        assert "WassersteinBall" in TYPE_PLANNER_SYSTEM
+
+    def test_type_planner_fewshot_lipschitz(self):
+        from agentic_research.agents.prompt_templates import TYPE_PLANNER_SYSTEM
+
+        assert "LipschitzWith" in TYPE_PLANNER_SYSTEM
+        assert "PseudoEMetricSpace" in TYPE_PLANNER_SYSTEM
+
+    def test_type_planner_has_cot_instruction(self):
+        from agentic_research.agents.prompt_templates import TYPE_PLANNER_SYSTEM
+
+        assert "Chain-of-Thought Decomposition" in TYPE_PLANNER_SYSTEM
+        assert "explain your formalization strategy" in TYPE_PLANNER_SYSTEM
+        assert "Which Mathlib namespaces and types" in TYPE_PLANNER_SYSTEM
+
+    def test_theorem_formalizer_has_cot_instruction(self):
+        from agentic_research.agents.prompt_templates import THEOREM_FORMALIZER_SYSTEM
+
+        assert "Chain-of-Thought Decomposition" in THEOREM_FORMALIZER_SYSTEM
+        assert "explain your formalization strategy" in THEOREM_FORMALIZER_SYSTEM
+        assert "Which Mathlib namespaces and types" in THEOREM_FORMALIZER_SYSTEM
+
+    def test_fewshot_examples_have_lean_code_blocks(self):
+        from agentic_research.agents.prompt_templates import TYPE_PLANNER_SYSTEM
+
+        assert TYPE_PLANNER_SYSTEM.count("```lean") >= 3
+        assert TYPE_PLANNER_SYSTEM.count("```") >= 6
+
+    def test_fewshot_examples_use_real_mathlib_apis(self):
+        from agentic_research.agents.prompt_templates import TYPE_PLANNER_SYSTEM
+
+        real_apis = [
+            "MeasureTheory.Measure",
+            "MeasureTheory.integral",
+            "IsProbabilityMeasure",
+            "Integrable",
+            "EMetric.ball",
+            "Metric.ball",
+            "LipschitzWith",
+            "PseudoEMetricSpace",
+            "PseudoMetricSpace",
+            "MeasurableSpace",
+            "ENNReal",
+        ]
+        for api in real_apis:
+            assert api in TYPE_PLANNER_SYSTEM, f"Missing real Mathlib API: {api}"
+
 
 # ---------------------------------------------------------------------------
 # agents/prover.py

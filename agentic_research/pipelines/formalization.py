@@ -21,6 +21,7 @@ from agentic_research.models.formalization import (
     AuctionVerdict,
     ClaimCheckResult,
     ClaimCheckVerdict,
+    DataPackageCandidate,
     FormalizationPipelineResult,
     LemmaStatement,
     TheoremFormalization,
@@ -199,7 +200,33 @@ class FormalizationPipeline:
         else:
             ordered = new_types
 
+        data_packages: list[DataPackageCandidate] = []
+
         for candidate in ordered:
+            # Check if this type has 0 Loogle results — if so, suggest a data package
+            search_result = self._search.execute(candidate.name)
+            search_entries = getattr(search_result, "entries", [])
+
+            if not search_entries:
+                planner = TypePlanner(llm_client=self._llm, lean_search=self._search)
+                data_pkg = planner.suggest_data_package(
+                    type_name=candidate.name,
+                    type_description=candidate.informal_description,
+                )
+                if data_pkg and data_pkg.lean_structure:
+                    log.info(
+                        "data_package_used",
+                        type_name=candidate.name,
+                        package_name=data_pkg.package_name,
+                    )
+                    data_packages.append(data_pkg)
+                    prior_definitions = (
+                        f"{prior_definitions}\n\n{data_pkg.lean_structure}"
+                        if prior_definitions
+                        else data_pkg.lean_structure
+                    )
+                    continue
+
             lemmas = lemmas_by_type.get(candidate.name, [])
 
             auction_result = self._auction_type(
@@ -224,7 +251,7 @@ class FormalizationPipeline:
             type_plan=type_plan,
             auction_results=auction_results,
             accepted_types=accepted,
-            all_types_accepted=len(accepted) == len(new_types),
+            all_types_accepted=(len(accepted) + len(data_packages)) == len(new_types),
             total_proved_lemmas=total_proved,
             total_failed_lemmas=total_failed,
         )

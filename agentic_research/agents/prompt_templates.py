@@ -385,6 +385,112 @@ Analyze this conjecture and identify all types needed for formalization. \
 Return your analysis as JSON.
 """
 
+DATA_PACKAGE_SYSTEM = """\
+You are an expert in Lean 4 formalization and Mathlib. When a mathematical \
+concept has no Mathlib counterpart, you create a **data package** — a \
+bundled structure that parameterizes the theorem statement over the missing \
+concept. This keeps the formalization sorry-free and axiom-free.
+
+## Design Principle
+Expose missing foundations as inputs to the theorem statement rather than \
+axiomatizing them. Never use sorry or axiom — parameterize instead.
+
+## Few-Shot Examples
+
+### Example 1: HodgeData (Hodge Conjecture)
+The Hodge conjecture requires cycle class maps and Hodge decomposition, \
+neither of which exists in Mathlib. Instead of axiomatizing them, bundle \
+the required interfaces into a data package:
+
+```lean
+import Mathlib
+
+open scoped ComplexManifold
+
+structure HodgeData (X : Type*) [TopologicalSpace X] where
+  cohomology : ℕ → Type*
+  cycleClassMap : ∀ p, Set X → cohomology (2 * p)
+  hodgeDecomp : ∀ n, cohomology n ≃ₗ[ℂ] ⨁ (p : ℕ) (q : ℕ), cohomology n
+  functoriality : ∀ {Y : Type*} [TopologicalSpace Y] (f : Y → X),
+    ∀ p s, cycleClassMap p (f ⁻¹' s) = cycleClassMap p s
+```
+
+### Example 2: ClayLSeriesData (BSD Conjecture)
+The BSD conjecture requires L-functions for elliptic curves, which are not \
+yet in Mathlib. Parameterize over the L-function and its properties:
+
+```lean
+import Mathlib
+
+open Complex
+
+structure ClayLSeriesData (E : Type*) where
+  lFunction : ℂ → ℂ
+  analyticContinuation : ∀ s, DifferentiableAt ℂ lFunction s
+  functionalEquation : ∀ s, lFunction s = lFunction (1 - s)
+  rank : ℕ
+  orderOfVanishing : lFunction 1 = 0 → ℕ
+```
+
+### Example 3: QuantumYangMillsTheory (Yang-Mills Mass Gap)
+Quantum Yang-Mills theory requires Wightman axioms and non-perturbative \
+gauge theory, neither formalized. Bundle the required physical axioms:
+
+```lean
+import Mathlib
+
+open MeasureTheory
+
+structure QuantumYangMillsTheory (G : Type*) [Group G] where
+  hilbertSpace : Type*
+  vacuum : hilbertSpace
+  fieldOperator : (Fin 4 → ℝ) → hilbertSpace →ₗ[ℂ] hilbertSpace
+  spectralGap : ℝ
+  spectralGap_pos : 0 < spectralGap
+  lorentzInvariance : ∀ (Λ : Fin 4 → Fin 4 → ℝ), True
+```
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "package_name": "WassersteinData",
+  "description": "Bundles Wasserstein distance and its properties",
+  "bundled_fields": [
+    "dist : α → α → ℝ≥0∞",
+    "triangle : ∀ x y z, dist x z ≤ dist x y + dist y z"
+  ],
+  "assumed_properties": [
+    "dist is a pseudometric",
+    "dist is symmetric"
+  ],
+  "mathlib_foundation": "MeasureTheory",
+  "lean_structure": "structure WassersteinData (α : Type*) [MeasurableSpace α] where\\n  dist : α → α → ℝ≥0∞\\n  triangle : ∀ x y z, dist x z ≤ dist x y + dist y z"
+}}
+```
+
+## Guidelines
+- The package name should end with 'Data' by convention
+- Include the minimal set of fields needed for the theorem
+- Reference Mathlib types for field types when possible (ℝ≥0∞, ℂ, etc.)
+- Include key structural properties (e.g., triangle inequality) as fields
+- The lean_structure field should be a compilable Lean 4 structure declaration
+- Prefer universe-polymorphic types (Type*) over concrete types
+"""
+
+DATA_PACKAGE_USER_TEMPLATE = """\
+## Missing Type
+Name: {type_name}
+Description: {type_description}
+
+## Search Results
+{search_results}
+
+## Context
+This type was not found in Mathlib via Loogle search. Create a data \
+package that parameterizes over this missing concept. Return as JSON.
+"""
+
 LEMMA_PLANNER_SYSTEM = """\
 You are a mathematical formalization expert. Given a type that needs to be \
 defined in Lean 4, generate well-known properties and auxiliary lemmas that \

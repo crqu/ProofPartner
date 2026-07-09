@@ -33,6 +33,34 @@ class TypeCandidate(BaseModel):
     )
 
 
+class DataPackageCandidate(BaseModel):
+    """A data package that parameterizes a theorem over missing Mathlib concepts.
+
+    Instead of inventing new type definitions or using sorry/axiom,
+    data packages bundle the required objects and properties as structure
+    fields — exposing missing foundations as inputs to the theorem statement.
+    """
+
+    package_name: str = Field(description="Structure name, e.g. 'WassersteinData'")
+    description: str = Field(description="What this package represents")
+    bundled_fields: list[str] = Field(
+        default_factory=list,
+        description="Fields the package bundles, e.g. ['dist : α → α → ℝ≥0∞']",
+    )
+    assumed_properties: list[str] = Field(
+        default_factory=list,
+        description="Properties assumed about the package",
+    )
+    mathlib_foundation: str = Field(
+        default="",
+        description="Which Mathlib namespace this extends (e.g. 'MeasureTheory')",
+    )
+    lean_structure: str = Field(
+        default="",
+        description="Generated Lean 4 structure declaration",
+    )
+
+
 class TypeDependencyGraph(BaseModel):
     """Dependency graph between type candidates."""
 

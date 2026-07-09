@@ -7,6 +7,8 @@ from __future__ import annotations
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
+    DATA_PACKAGE_SYSTEM,
+    DATA_PACKAGE_USER_TEMPLATE,
     TYPE_PLANNER_SYSTEM,
     TYPE_PLANNER_USER_TEMPLATE,
 )
@@ -17,6 +19,7 @@ from agentic_research.models.agents import (
     AgentStatus,
 )
 from agentic_research.models.formalization import (
+    DataPackageCandidate,
     TypeCandidate,
     TypeDependencyGraph,
     TypePlan,
@@ -115,3 +118,56 @@ class TypePlanner(BaseAgent):
             dependency_graph=dep_graph,
             mathlib_imports=parsed.get("mathlib_imports", []),
         )
+
+    def suggest_data_package(
+        self,
+        type_name: str,
+        type_description: str,
+        search_summary: str = "No Mathlib results found.",
+    ) -> DataPackageCandidate | None:
+        """Suggest a data package parameterization for a type not found in Mathlib.
+
+        Only call this when Loogle search returns 0 results for a candidate type.
+        Returns a DataPackageCandidate with a bundled structure declaration.
+        """
+        log.info(
+            "data_package_suggest_start",
+            type_name=type_name,
+        )
+
+        user_content = DATA_PACKAGE_USER_TEMPLATE.format(
+            type_name=type_name,
+            type_description=type_description,
+            search_results=search_summary,
+        )
+
+        response = self._llm.complete(
+            system=DATA_PACKAGE_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+            temperature=0.2,
+            use_cache=True,
+        )
+        self._accumulate_tokens(response.token_usage)
+
+        parsed = self._llm.extract_json(response.content)
+        if not isinstance(parsed, dict):
+            log.warning("data_package_parse_failed", type_name=type_name)
+            return None
+
+        candidate = DataPackageCandidate(
+            package_name=parsed.get("package_name", f"{type_name}Data"),
+            description=parsed.get("description", type_description),
+            bundled_fields=parsed.get("bundled_fields", []),
+            assumed_properties=parsed.get("assumed_properties", []),
+            mathlib_foundation=parsed.get("mathlib_foundation", ""),
+            lean_structure=parsed.get("lean_structure", ""),
+        )
+
+        log.info(
+            "data_package_suggest_done",
+            type_name=type_name,
+            package_name=candidate.package_name,
+            num_fields=len(candidate.bundled_fields),
+        )
+
+        return candidate

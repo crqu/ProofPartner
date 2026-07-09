@@ -24,6 +24,7 @@ from agentic_research.models.formalization import (
     AuxiliaryLemma,
     ClaimCheckResult,
     ClaimCheckVerdict,
+    DataPackageCandidate,
     FormalizationPipelineResult,
     LemmaStatement,
     TheoremFormalization,
@@ -1180,3 +1181,287 @@ class TestFormalizationPromptTemplates:
             type_definitions="-- none",
         )
         assert "conjecture" in rendered
+
+
+# ---------------------------------------------------------------------------
+# models/formalization.py — DataPackageCandidate
+# ---------------------------------------------------------------------------
+
+
+class TestDataPackageCandidate:
+    def test_basic_creation(self):
+        pkg = DataPackageCandidate(
+            package_name="WassersteinData",
+            description="Bundles Wasserstein distance and its properties",
+        )
+        assert pkg.package_name == "WassersteinData"
+        assert pkg.bundled_fields == []
+        assert pkg.assumed_properties == []
+        assert pkg.mathlib_foundation == ""
+        assert pkg.lean_structure == ""
+
+    def test_full_creation(self):
+        pkg = DataPackageCandidate(
+            package_name="WassersteinData",
+            description="Bundles Wasserstein distance",
+            bundled_fields=["dist : α → α → ℝ≥0∞", "triangle : ∀ x y z, dist x z ≤ dist x y + dist y z"],
+            assumed_properties=["dist is a pseudometric"],
+            mathlib_foundation="MeasureTheory",
+            lean_structure="structure WassersteinData (α : Type*) where\n  dist : α → α → ℝ≥0∞",
+        )
+        assert len(pkg.bundled_fields) == 2
+        assert pkg.mathlib_foundation == "MeasureTheory"
+        assert "structure WassersteinData" in pkg.lean_structure
+
+    def test_serialization(self):
+        pkg = DataPackageCandidate(
+            package_name="HodgeData",
+            description="Hodge conjecture data",
+            bundled_fields=["cohomology : ℕ → Type*"],
+            assumed_properties=["functorial"],
+            mathlib_foundation="Topology",
+            lean_structure="structure HodgeData where",
+        )
+        restored = DataPackageCandidate.model_validate(pkg.model_dump())
+        assert restored == pkg
+
+    def test_defaults(self):
+        pkg = DataPackageCandidate(
+            package_name="P",
+            description="d",
+        )
+        assert pkg.bundled_fields == []
+        assert pkg.assumed_properties == []
+        assert pkg.mathlib_foundation == ""
+        assert pkg.lean_structure == ""
+
+
+# ---------------------------------------------------------------------------
+# agents/prompt_templates.py — DATA_PACKAGE_SYSTEM
+# ---------------------------------------------------------------------------
+
+
+class TestDataPackagePromptTemplates:
+    def test_system_prompt_contains_examples(self):
+        from agentic_research.agents.prompt_templates import DATA_PACKAGE_SYSTEM
+
+        assert "HodgeData" in DATA_PACKAGE_SYSTEM
+        assert "ClayLSeriesData" in DATA_PACKAGE_SYSTEM
+        assert "QuantumYangMillsTheory" in DATA_PACKAGE_SYSTEM
+
+    def test_system_prompt_contains_design_principle(self):
+        from agentic_research.agents.prompt_templates import DATA_PACKAGE_SYSTEM
+
+        assert "Expose missing foundations as inputs" in DATA_PACKAGE_SYSTEM
+        assert "Never use sorry or axiom" in DATA_PACKAGE_SYSTEM
+
+    def test_user_template_renders(self):
+        from agentic_research.agents.prompt_templates import DATA_PACKAGE_USER_TEMPLATE
+
+        rendered = DATA_PACKAGE_USER_TEMPLATE.format(
+            type_name="WassersteinDistance",
+            type_description="Wasserstein distance between probability measures",
+            search_results="No Mathlib results found.",
+        )
+        assert "WassersteinDistance" in rendered
+        assert "No Mathlib results found." in rendered
+
+
+# ---------------------------------------------------------------------------
+# agents/type_planner.py — suggest_data_package()
+# ---------------------------------------------------------------------------
+
+
+MOCK_DATA_PACKAGE_RESPONSE = json.dumps({
+    "package_name": "WassersteinData",
+    "description": "Bundles Wasserstein distance and its metric properties",
+    "bundled_fields": [
+        "dist : α → α → ℝ≥0∞",
+        "dist_self : ∀ x, dist x x = 0",
+        "triangle : ∀ x y z, dist x z ≤ dist x y + dist y z",
+    ],
+    "assumed_properties": [
+        "dist is a pseudometric",
+        "dist is symmetric",
+    ],
+    "mathlib_foundation": "MeasureTheory",
+    "lean_structure": "structure WassersteinData (α : Type*) [MeasurableSpace α] where\n  dist : α → α → ℝ≥0∞\n  dist_self : ∀ x, dist x x = 0\n  triangle : ∀ x y z, dist x z ≤ dist x y + dist y z",
+})
+
+
+class TestSuggestDataPackage:
+    def test_basic_suggestion(self):
+        from agentic_research.agents.type_planner import TypePlanner
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        llm = _make_mock_llm([MOCK_DATA_PACKAGE_RESPONSE])
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        planner = TypePlanner(llm_client=llm, lean_search=search)
+        result = planner.suggest_data_package(
+            type_name="WassersteinDistance",
+            type_description="Wasserstein distance between probability measures",
+        )
+
+        assert result is not None
+        assert result.package_name == "WassersteinData"
+        assert len(result.bundled_fields) == 3
+        assert result.mathlib_foundation == "MeasureTheory"
+        assert "structure WassersteinData" in result.lean_structure
+
+    def test_returns_none_on_bad_json(self):
+        from agentic_research.agents.type_planner import TypePlanner
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        llm = _make_mock_llm(["not valid json at all"])
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        planner = TypePlanner(llm_client=llm, lean_search=search)
+        result = planner.suggest_data_package(
+            type_name="BadType",
+            type_description="desc",
+        )
+
+        assert result is None
+
+    def test_tracks_tokens(self):
+        from agentic_research.agents.type_planner import TypePlanner
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        llm = _make_mock_llm([MOCK_DATA_PACKAGE_RESPONSE])
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        planner = TypePlanner(llm_client=llm, lean_search=search)
+        planner.suggest_data_package(
+            type_name="Test",
+            type_description="test",
+        )
+
+        assert planner.cumulative_tokens.input_tokens == 100
+        assert planner.cumulative_tokens.output_tokens == 50
+
+    def test_defaults_package_name(self):
+        from agentic_research.agents.type_planner import TypePlanner
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        response = json.dumps({
+            "description": "desc",
+            "bundled_fields": [],
+            "assumed_properties": [],
+            "mathlib_foundation": "",
+            "lean_structure": "structure TestData where",
+        })
+        llm = _make_mock_llm([response])
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        planner = TypePlanner(llm_client=llm, lean_search=search)
+        result = planner.suggest_data_package(
+            type_name="Test",
+            type_description="test",
+        )
+
+        assert result is not None
+        assert result.package_name == "TestData"
+
+
+# ---------------------------------------------------------------------------
+# pipelines/formalization.py — data package handling
+# ---------------------------------------------------------------------------
+
+
+class TestFormalizationPipelineDataPackage:
+    def test_data_package_used_when_no_search_results(self):
+        from agentic_research.pipelines.formalization import FormalizationPipeline
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+        from agentic_research.models.tools import SearchResult, ToolStatus
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        plan_with_missing_type = json.dumps({
+            "candidates": [
+                {
+                    "name": "WassersteinDistance",
+                    "informal_description": "Wasserstein distance between measures",
+                    "is_in_mathlib": False,
+                    "composition_alternative": None,
+                },
+            ],
+            "dependency_graph": {"edges": [], "topological_order": ["WassersteinDistance"]},
+            "mathlib_imports": ["Mathlib.MeasureTheory.Measure.MeasureSpace"],
+        })
+
+        empty_lemmas = json.dumps({"lemmas": []})
+
+        responses = [
+            plan_with_missing_type,
+            empty_lemmas,
+            MOCK_DATA_PACKAGE_RESPONSE,
+            MOCK_THEOREM_LEAN,
+            MOCK_CLAIM_CHECK_PASS,
+        ]
+
+        llm = _make_mock_llm(responses)
+
+        # Mock the search to return empty results for WassersteinDistance
+        original_execute = search.execute
+
+        def mock_search_execute(input_data):
+            query = str(input_data)
+            if "WassersteinDistance" in query:
+                return SearchResult(
+                    status=ToolStatus.SUCCESS,
+                    query=query,
+                    entries=[],
+                    total_results=0,
+                )
+            return original_execute(input_data)
+
+        search.execute = mock_search_execute
+
+        pipeline = FormalizationPipeline(
+            llm_client=llm,
+            lean_repl=repl,
+            lean_search=search,
+        )
+
+        result = pipeline.run("Wasserstein distance satisfies triangle inequality")
+        assert result.success
+        assert result.type_formalization is not None
+        assert result.type_formalization.all_types_accepted
+
+    def test_data_package_skipped_when_search_has_results(self):
+        from agentic_research.pipelines.formalization import FormalizationPipeline
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+        from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
+
+        responses = [
+            MOCK_TYPE_PLAN_RESPONSE,
+            MOCK_LEMMA_PLAN_RESPONSE,
+        ]
+        for _k in range(3):
+            responses.append(MOCK_TYPE_LEAN_CODE)
+            responses.append(MOCK_LEMMA_LEAN_CODE)
+            responses.append(MOCK_PROOF_CODE)
+            responses.append(MOCK_LEMMA_LEAN_CODE)
+            responses.append(MOCK_PROOF_CODE)
+        responses.append(MOCK_THEOREM_LEAN)
+        responses.append(MOCK_CLAIM_CHECK_PASS)
+
+        llm = _make_mock_llm(responses)
+
+        pipeline = FormalizationPipeline(
+            llm_client=llm,
+            lean_repl=repl,
+            lean_search=search,
+            k=3,
+            prover_config=ProverConfig(max_iterations=1),
+        )
+
+        result = pipeline.run("Quasi-random graphs have specific edge distribution")
+        assert result.success
+        assert len(result.type_formalization.accepted_types) == 1

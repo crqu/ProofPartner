@@ -243,6 +243,89 @@ analyze a mathematical conjecture and identify which types (structures, \
 definitions, or concepts) are needed beyond what Lean 4 and Mathlib already \
 provide.
 
+## Chain-of-Thought Decomposition
+Before writing any Lean 4 code or JSON output, explain your formalization \
+strategy step by step:
+1. Which Mathlib namespaces and types you will use
+2. Why these are the correct types for the mathematical concepts
+3. Any composition or parameterization needed to express the conjecture
+
+Then produce your JSON output.
+
+## Few-Shot Examples
+
+### Example 1: Expected value of a measurable function
+**Mathematical statement:** "The expected value of a measurable function f \
+under probability measure μ is finite."
+
+**Correct Mathlib types:**
+- `MeasureTheory.Measure` for the probability measure μ
+- `MeasureTheory.Measure.IsProbabilityMeasure` for the probability constraint
+- `MeasureTheory.Integrable` for finite expectation
+- `MeasureTheory.integral` (notation: `∫ x, f x ∂μ`) for the integral
+
+**Lean 4 sketch:**
+```lean
+import Mathlib
+
+open MeasureTheory
+
+variable {Ω : Type*} [MeasurableSpace Ω]
+variable (μ : Measure Ω) [IsProbabilityMeasure μ]
+variable (f : Ω → ℝ) (hf : Integrable f μ)
+
+#check ∫ x, f x ∂μ  -- MeasureTheory.integral
+```
+
+### Example 2: Wasserstein-like distance balls
+**Mathematical statement:** "The set of measures within Wasserstein distance \
+r of a reference measure P."
+
+**Correct Mathlib types:**
+- `EMetric.ball` for balls in extended metric spaces (when distance may be ∞)
+- `Metric.ball` for balls in standard metric spaces
+- Do NOT invent a `WassersteinBall` type — compose existing primitives
+
+**Lean 4 sketch:**
+```lean
+import Mathlib
+
+open scoped ENNReal
+
+-- For a general metric space ball of radius r around center p:
+variable {α : Type*} [PseudoMetricSpace α]
+variable (p : α) (r : ℝ)
+
+#check Metric.ball p r  -- {x | dist x p < r}
+
+-- For extended metric (when distances may be infinite):
+variable {β : Type*} [PseudoEMetricSpace β]
+variable (q : β) (s : ℝ≥0∞)
+
+#check EMetric.ball q s  -- {x | edist x q < s}
+```
+
+### Example 3: Lipschitz continuity constraints
+**Mathematical statement:** "Function f is Lipschitz continuous with \
+constant L."
+
+**Correct Mathlib types:**
+- `LipschitzWith` for the Lipschitz bound (uses `ENNReal` constant)
+- Do NOT define a new `LipschitzFunction` structure — use the existing predicate
+
+**Lean 4 sketch:**
+```lean
+import Mathlib
+
+open scoped ENNReal
+
+variable {α β : Type*} [PseudoEMetricSpace α] [PseudoEMetricSpace β]
+variable (L : ℝ≥0) (f : α → β)
+
+#check LipschitzWith (L : ℝ≥0) f
+-- Means: ∀ x y, edist (f x) (f y) ≤ L * edist x y
+```
+
 ## Output Format
 Return a JSON object with this exact structure:
 ```json
@@ -421,12 +504,21 @@ THEOREM_FORMALIZER_SYSTEM = """\
 You are an expert Lean 4 theorem prover. Given a natural language conjecture \
 and Lean 4 type definitions, produce a Lean 4 theorem statement.
 
+## Chain-of-Thought Decomposition
+Before writing Lean 4 code, explain your formalization strategy:
+1. Which Mathlib namespaces and types you will use
+2. Why these are the correct types for the mathematical concepts
+3. Any composition or parameterization needed
+
+Then write the Lean 4 code.
+
 ## Guidelines
 - The theorem must compile with the provided type definitions
 - Use `theorem` keyword with `sorry` as proof body
 - Import Mathlib as needed
 - The statement should faithfully capture the natural language conjecture
 - Include all necessary type annotations
+- Prefer composing existing Mathlib types over inventing new definitions
 
 ## Output Format
 Return ONLY the Lean 4 code inside a ```lean code block.

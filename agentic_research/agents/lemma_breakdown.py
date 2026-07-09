@@ -89,13 +89,15 @@ class LemmaBreakdown(BaseAgent):
         if isinstance(parsed, dict):
             for item in parsed.get("lemmas", []):
                 node_id = item.get("node_id", f"lemma_{len(nodes)}")
+                is_prior_work = item.get("from_prior_work", False)
                 child_node = ProofNode(
                     node_id=node_id,
                     statement_nl=item.get("statement_nl", ""),
                     depth=depth + 1,
                     parent_id=parent_id,
                     status=NodeStatus.PENDING,
-                    from_prior_work=item.get("from_prior_work", False),
+                    from_prior_work=is_prior_work,
+                    source_reference=item.get("source_reference") if is_prior_work else None,
                 )
                 item.get("depends_on", [])
                 child_node.children = []

@@ -12,7 +12,11 @@ import time
 
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
+from agentic_research.agents.informalizer import Informalizer
+from agentic_research.agents.intent_judge import IntentJudge
 from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+from agentic_research.agents.proof_critic import ProofCritic
+from agentic_research.agents.proof_detailer import ProofDetailer
 from agentic_research.agents.lemma_leanifier import LemmaLeanifier
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.proof_corrector import ProofCorrector
@@ -23,6 +27,7 @@ from agentic_research.models.agents import AgentContext, AgentStatus, ProverConf
 from agentic_research.models.external_prover import ExternalProverConfig
 from agentic_research.models.formalization import ClaimCheckVerdict
 from agentic_research.models.proof import (
+    CritiqueResult,
     ErrorCategory,
     LemmaTree,
     ProofCorrection,
@@ -30,6 +35,7 @@ from agentic_research.models.proof import (
     ProofSearchResult,
     RecursiveProofResult,
 )
+from agentic_research.models.verification import IntentVerdictType
 from agentic_research.tools.lean_repl import LeanRepl
 from agentic_research.tools.lean_search import LeanSearch
 
@@ -52,6 +58,9 @@ class ProofPipeline:
         use_claim_check: bool = True,
         use_external_prover: bool = False,
         external_prover_config: ExternalProverConfig | None = None,
+        use_proof_critic: bool = False,
+        max_critic_retries: int = 2,
+        use_proof_detailer: bool = False,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -63,6 +72,9 @@ class ProofPipeline:
         self._use_claim_check = use_claim_check
         self._use_external_prover = use_external_prover
         self._external_prover_config = external_prover_config
+        self._use_proof_critic = use_proof_critic
+        self._max_critic_retries = max_critic_retries
+        self._use_proof_detailer = use_proof_detailer
         self._total_tokens = TokenUsage()
 
     def _accumulate_tokens(self, usage: TokenUsage) -> None:
@@ -186,6 +198,31 @@ class ProofPipeline:
                 total_token_usage=self._total_tokens,
             )
 
+        if self._use_proof_critic:
+            critique = self._run_proof_critic(tree, statement_nl, lean_statement)
+            if critique and not critique.passed:
+                for _retry in range(self._max_critic_retries):
+                    tree = self._run_lemma_breakdown(
+                        lean_statement, statement_nl, search_result
+                    )
+                    if tree is None:
+                        break
+                    critique = self._run_proof_critic(tree, statement_nl, lean_statement)
+                    if critique is None or critique.passed:
+                        break
+
+            if tree is None:
+                return ProofPipelineResult(
+                    statement=lean_statement,
+                    search_result=search_result,
+                    failure_stage="proof_critic",
+                    failure_reason="Lemma breakdown failed after critic retries",
+                    total_token_usage=self._total_tokens,
+                )
+
+        if self._use_proof_detailer:
+            tree = self._run_proof_detailer(tree)
+
         tree = self._run_lemma_leanifier(tree)
         if tree is None:
             return ProofPipelineResult(
@@ -195,6 +232,9 @@ class ProofPipeline:
                 failure_reason="Lemma leanification failed",
                 total_token_usage=self._total_tokens,
             )
+
+        if self._use_claim_check:
+            self._verify_axiom_nodes(tree, statement_nl)
 
         recursive_result = self._run_recursive_prover(tree)
 
@@ -434,6 +474,60 @@ class ProofPipeline:
             needs_decomposition=True,
             failure_reason="Corrected proof search returned no result",
         )
+
+    def _run_proof_detailer(self, tree: LemmaTree) -> LemmaTree:
+        detailer = ProofDetailer(llm_client=self._llm)
+        ctx = AgentContext(
+            task="detail proof nodes",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        result = detailer.run(ctx)
+        self._accumulate_tokens(detailer.cumulative_tokens)
+        if result.status == AgentStatus.SUCCESS and result.result:
+            return LemmaTree.model_validate(result.result)
+        return tree
+
+    def _run_proof_critic(
+        self, tree: LemmaTree, statement_nl: str, statement_lean: str
+    ) -> CritiqueResult | None:
+        critic = ProofCritic(llm_client=self._llm)
+        ctx = AgentContext(
+            task=statement_nl,
+            metadata={
+                "lemma_tree": tree.model_dump(),
+                "statement_lean": statement_lean,
+            },
+        )
+        result = critic.run(ctx)
+        self._accumulate_tokens(critic.cumulative_tokens)
+        if result.status == AgentStatus.SUCCESS and result.result:
+            return CritiqueResult.model_validate(result.result)
+        return None
+
+    def _verify_axiom_nodes(self, tree: LemmaTree, statement_nl: str) -> None:
+        """Run IntentJudge on axiom nodes to verify faithfulness."""
+        informalizer = Informalizer(llm_client=self._llm)
+        judge = IntentJudge(llm_client=self._llm, informalizer=informalizer)
+
+        for node_id, node in tree.nodes.items():
+            if not node.from_prior_work or not node.statement_lean:
+                continue
+
+            verdict = judge.judge(
+                lean_code=node.statement_lean,
+                original_idea=node.source_reference or node.statement_nl,
+                conjecture=node.statement_nl,
+            )
+            self._accumulate_tokens(judge.cumulative_tokens)
+
+            if verdict.overall_verdict == IntentVerdictType.INCORRECT:
+                log.warning(
+                    "axiom_intent_check_failed",
+                    node_id=node_id,
+                    concerns=verdict.all_concerns,
+                )
+                node.statement_lean = ""
+                node.from_prior_work = False
 
     def _run_claim_check(self, statement: str, proof_code: str) -> bool:
         checker = ClaimCheck(llm_client=self._llm, use_llm_check=True)

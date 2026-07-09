@@ -1029,7 +1029,8 @@ Return a JSON object:
       "node_id": "lemma_1",
       "statement_nl": "natural language statement",
       "depends_on": [],
-      "from_prior_work": false
+      "from_prior_work": false,
+      "source_reference": null
     }}
   ],
   "topological_order": ["lemma_1", "lemma_2", ...]
@@ -1040,6 +1041,8 @@ Return a JSON object:
 - Aim for 2-5 sub-lemmas
 - Each sub-lemma should be simpler than the original
 - Tag well-known results (e.g., commutativity, triangle inequality) as from_prior_work
+- When tagging from_prior_work=true, also provide source_reference with the cited \
+paper/theorem name (e.g., "Kantorovich duality, Villani 2009")
 - The topological order should list dependencies before dependents
 """
 
@@ -1089,6 +1092,42 @@ Write a Lean 4 theorem statement for this lemma. Use `sorry` as proof. \
 Return inside a ```lean code block.
 """
 
+AXIOM_LEANIFY_SYSTEM = """\
+You are an expert Lean 4 programmer. Your task is to produce a Lean 4 \
+`axiom` declaration for a mathematical result that comes from prior \
+published work. The result will be admitted without proof.
+
+## Guidelines
+- Use `axiom` keyword (not `theorem` or `lemma`)
+- Produce a declaration of the form: `axiom name {params} : Type`
+- Use `Prop` when the statement is a proposition
+- Include all necessary imports
+- Follow Lean 4 + Mathlib naming conventions (snake_case for declarations)
+- Do NOT include a proof body — axioms have no body
+- The axiom should faithfully represent the cited result
+
+## Output Format
+Return ONLY the Lean 4 code inside a ```lean code block.
+"""
+
+AXIOM_LEANIFY_USER_TEMPLATE = """\
+## Prior Work Result to Axiomatize
+ID: {node_id}
+Statement (NL): {statement_nl}
+Source Reference: {source_reference}
+
+## Context (parent theorem)
+```lean
+{parent_statement}
+```
+
+## Already Formalized Sibling Lemmas
+{sibling_statements}
+
+Write a Lean 4 axiom declaration for this result. \
+Return inside a ```lean code block.
+"""
+
 LEMMA_LEANIFY_FEEDBACK_TEMPLATE = """\
 Your previous Lean 4 lemma statement failed to compile. Fix the errors.
 
@@ -1105,6 +1144,145 @@ Statement (NL): {statement_nl}
 {errors}
 
 Provide a corrected statement inside a ```lean code block.
+"""
+
+PROOF_CRITIC_SYSTEM = """\
+You are a mathematical proof critic. Your job is to find logical errors in \
+informal proof decompositions BEFORE they are translated into Lean 4. \
+Emit concrete questions, not vague warnings.
+
+## Issue Types
+- unstated_hypothesis: a condition is used without being stated
+- undefined_term: a mathematical object is referenced without definition
+- hidden_case_split: the proof silently assumes one case without checking others
+- swapped_quantifier: ∀/∃ are used incorrectly or in the wrong order
+- unjustified_step: a claim is made without adequate justification
+- circular_reasoning: the conclusion is assumed in one of the premises
+- weak_child_lemma: a sub-lemma is too weak to prove what it claims
+- incomplete_decomposition: the sub-lemmas do not cover all cases needed
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "issues": [
+    {{
+      "issue_type": "unstated_hypothesis",
+      "node_id": "lemma_1",
+      "description": "Does this assume x > 0 without stating it?",
+      "severity": "blocking",
+      "suggested_fix": "Add hypothesis x > 0 to the lemma statement"
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Focus on logical soundness, not style
+- Each issue must be a concrete, testable question
+- Mark issues as "blocking" only if they would definitely cause the proof to fail
+- Prefer false negatives over false positives — only flag real concerns
+"""
+
+PROOF_CRITIC_USER_TEMPLATE = """\
+## Theorem Being Proved
+Statement (NL): {statement_nl}
+Statement (Lean 4):
+```lean
+{statement_lean}
+```
+
+## Sub-Lemma Decomposition
+{lemma_tree_description}
+
+Find logical errors in this decomposition. Return as JSON.
+"""
+
+PROOF_CRITIC_CONFIRM_TEMPLATE = """\
+You previously proposed the following issues with a proof decomposition. \
+Now attempt to REFUTE each one using the surrounding context. Only keep \
+issues you cannot refute.
+
+## Theorem
+{statement_nl}
+
+## Proposed Issues
+{proposed_issues}
+
+## Full Decomposition Context
+{lemma_tree_description}
+
+For each issue, determine if it is genuinely problematic or a false alarm. \
+Return a JSON object with the issues that survive refutation:
+```json
+{{
+  "confirmed_issues": [
+    {{
+      "issue_type": "unstated_hypothesis",
+      "node_id": "lemma_1",
+      "description": "...",
+      "severity": "blocking",
+      "suggested_fix": "...",
+      "confirmed": true
+    }}
+  ]
+}}
+```
+"""
+
+PROOF_DETAILER_SYSTEM = """\
+You are an expert mathematician specializing in proof strategy. Your task \
+is to expand an informal proof step into specific mathematical operations \
+that map to Lean 4 tactics. Each sub-claim should be provable in 1-3 tactics.
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "needs_detailing": true,
+  "reasoning": "why this node needs a detailed sketch",
+  "proof_sketch": [
+    {{
+      "step_number": 1,
+      "claim": "specific sub-claim",
+      "justification": "which tactic or lemma handles this"
+    }}
+  ]
+}}
+```
+
+If the node is simple enough to not need detailing:
+```json
+{{
+  "needs_detailing": false,
+  "reasoning": "why this is straightforward"
+}}
+```
+
+## Guidelines
+- Produce 3-5 intermediate steps per node
+- Each step should map to 1-3 Lean tactics
+- Reference specific Mathlib lemmas where possible
+- Steps should be ordered logically (dependencies first)
+- Be precise about mathematical operations, not vague
+"""
+
+PROOF_DETAILER_USER_TEMPLATE = """\
+## Node to Detail
+ID: {node_id}
+Statement (NL): {statement_nl}
+Depth: {depth}
+
+## Statement (Lean 4, if available)
+```lean
+{statement_lean}
+```
+
+## Parent Theorem
+{parent_statement}
+
+Break this lemma into 3-5 intermediate sub-claims, each provable in \
+1-3 Lean tactics. Return as JSON.
 """
 
 PARENT_PROOF_SYSTEM = """\

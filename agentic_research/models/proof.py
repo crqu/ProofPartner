@@ -66,6 +66,14 @@ class ProofNode(BaseModel):
     failure_diagnosis: FailureDiagnosis | None = None
     retries_used: int = Field(default=0, ge=0)
     from_prior_work: bool = Field(default=False, description="Tagged as from published work for axiomatization")
+    source_reference: str | None = Field(
+        default=None,
+        description="Citation for axiomatized prior work (e.g., 'Kantorovich duality, Villani 2009')",
+    )
+    proof_sketch_nl: str | None = Field(
+        default=None,
+        description="Tactic-granularity proof sketch (3-5 intermediate steps)",
+    )
 
 
 class LemmaTree(BaseModel):
@@ -140,6 +148,36 @@ class ProofCorrection(BaseModel):
     revised_proof_sketch: str = Field(default="", description="Corrected proof code")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reasoning: str = Field(default="", description="Why this fix should work")
+
+
+class CritiqueIssueType(str, Enum):
+    UNSTATED_HYPOTHESIS = "unstated_hypothesis"
+    UNDEFINED_TERM = "undefined_term"
+    HIDDEN_CASE_SPLIT = "hidden_case_split"
+    SWAPPED_QUANTIFIER = "swapped_quantifier"
+    UNJUSTIFIED_STEP = "unjustified_step"
+    CIRCULAR_REASONING = "circular_reasoning"
+    WEAK_CHILD_LEMMA = "weak_child_lemma"
+    INCOMPLETE_DECOMPOSITION = "incomplete_decomposition"
+
+
+class CritiqueIssue(BaseModel):
+    """A soundness concern raised by the proof critic."""
+
+    issue_type: CritiqueIssueType
+    node_id: str = Field(description="Node where the issue was found")
+    description: str = Field(description="Concrete question, e.g., 'Does this assume x > 0 without stating it?'")
+    severity: str = Field(default="warning", description="'blocking' or 'warning'")
+    suggested_fix: str = Field(default="", description="Actionable fix suggestion")
+    confirmed: bool = Field(default=False, description="True after adversarial self-check confirms the issue")
+
+
+class CritiqueResult(BaseModel):
+    """Result of auditing a LemmaTree for soundness."""
+
+    issues: list[CritiqueIssue] = Field(default_factory=list)
+    passed: bool = Field(default=True)
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class ProofPipelineResult(BaseModel):

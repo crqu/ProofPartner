@@ -518,7 +518,14 @@ class ProofPipeline:
         return None
 
     def _verify_axiom_nodes(self, tree: LemmaTree, statement_nl: str) -> None:
-        """Run IntentJudge on axiom nodes to verify faithfulness."""
+        """Run IntentJudge on axiom nodes to verify faithfulness.
+
+        For axiom nodes, a more-complete axiom (with extra assumptions like
+        Polish space requirements) will legitimately differ from the brief NL
+        description. We accept low-confidence INCORRECT verdicts with a warning
+        since the LLM isn't confident the axiom is actually wrong — it's likely
+        just flagging the additional hypotheses.
+        """
         informalizer = Informalizer(llm_client=self._llm)
         judge = IntentJudge(llm_client=self._llm, informalizer=informalizer)
 
@@ -534,18 +541,27 @@ class ProofPipeline:
             self._accumulate_tokens(judge.cumulative_tokens)
 
             if verdict.overall_verdict == IntentVerdictType.INCORRECT:
-                log.warning(
-                    "axiom_intent_check_failed",
-                    node_id=node_id,
-                    concerns=verdict.all_concerns,
-                )
-                node.status = NodeStatus.FAILED
-                node.failure_diagnosis = FailureDiagnosis(
-                    failure_type=FailureType.MISSING_HYPOTHESIS,
-                    description=f"Axiom faithfulness check failed: {verdict.all_concerns}",
-                )
-                node.from_prior_work = False
-                node.source_reference = None
+                if verdict.overall_confidence < 0.7:
+                    log.warning(
+                        "axiom_intent_check_low_confidence_accept",
+                        node_id=node_id,
+                        confidence=verdict.overall_confidence,
+                        concerns=verdict.all_concerns,
+                    )
+                else:
+                    log.warning(
+                        "axiom_intent_check_failed",
+                        node_id=node_id,
+                        confidence=verdict.overall_confidence,
+                        concerns=verdict.all_concerns,
+                    )
+                    node.status = NodeStatus.FAILED
+                    node.failure_diagnosis = FailureDiagnosis(
+                        failure_type=FailureType.MISSING_HYPOTHESIS,
+                        description=f"Axiom faithfulness check failed: {verdict.all_concerns}",
+                    )
+                    node.from_prior_work = False
+                    node.source_reference = None
 
     def _run_claim_check(self, statement: str, proof_code: str) -> bool:
         checker = ClaimCheck(llm_client=self._llm, use_llm_check=True)

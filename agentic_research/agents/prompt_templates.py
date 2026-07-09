@@ -1093,9 +1093,30 @@ Return inside a ```lean code block.
 """
 
 AXIOM_LEANIFY_SYSTEM = """\
-You are an expert Lean 4 programmer. Your task is to produce a Lean 4 \
-`axiom` declaration for a mathematical result that comes from prior \
-published work. The result will be admitted without proof.
+You are an expert Lean 4 programmer and mathematician. Your task is to \
+produce a Lean 4 `axiom` declaration for a mathematical result that comes \
+from prior published work. The axiom must be SELF-CONTAINED and \
+MATHEMATICALLY CORRECT — it must include ALL conditions required for the \
+result to hold.
+
+## Critical Rule: Include ALL Standard Assumptions
+When formalizing a cited result, you MUST include every standard \
+mathematical assumption required for the theorem to hold. Do NOT omit \
+conditions just because the brief description does not mention them — \
+the axiom must be correct as stated, independent of surrounding context.
+
+For well-known results, include their standard conditions:
+- **Kantorovich duality**: Polish/complete separable metric space, lower \
+semicontinuous cost function, probability measures, tight/Radon measures
+- **Sion's minimax theorem**: compact convex sets, quasi-concave/quasi-convex, \
+upper/lower semicontinuity
+- **Fenchel-Rockafellar duality**: proper convex lower semicontinuous functions, \
+constraint qualification (e.g. one function continuous at a point in the \
+domain of the other)
+- **Measurable selection (Kuratowski-Ryll-Nardzewski)**: Polish spaces, Borel \
+measurability, analytic/Suslin sets
+- **Prokhorov's theorem**: Polish space, tightness of the family of measures
+- **Disintegration of measures**: Polish spaces, Borel probability measures
 
 ## Guidelines
 - Use `axiom` keyword (not `theorem` or `lemma`)
@@ -1104,7 +1125,14 @@ published work. The result will be admitted without proof.
 - Include all necessary imports
 - Follow Lean 4 + Mathlib naming conventions (snake_case for declarations)
 - Do NOT include a proof body — axioms have no body
-- The axiom should faithfully represent the cited result
+- Use Lean 4 typeclasses for standard mathematical structures: \
+`[TopologicalSpace Ω]`, `[PolishSpace Ω]`, `[CompactSpace K]`, \
+`[MeasurableSpace Ω]`, `[MetricSpace X]`, `[ProbabilityMeasure μ]`, etc.
+- Prefer MORE hypotheses over fewer — a stronger assumption is safer than \
+a weaker one that might be mathematically incorrect or inconsistent
+- When the source_reference names a specific theorem (e.g., 'Villani 2009, \
+Thm 5.10'), formalize THAT specific theorem with its specific conditions, \
+not a weaker or stronger variant
 
 ## Output Format
 Return ONLY the Lean 4 code inside a ```lean code block.
@@ -1124,7 +1152,18 @@ Source Reference: {source_reference}
 ## Already Formalized Sibling Lemmas
 {sibling_statements}
 
-Write a Lean 4 axiom declaration for this result. \
+## Instructions
+1. First, recall the precise mathematical statement of this result from the \
+source reference. If the source names a specific theorem, use that exact statement.
+2. List ALL conditions and assumptions the theorem requires (topological, \
+measurability, integrability, compactness, regularity, continuity, etc.). \
+Do not skip conditions that "seem obvious" — state them all explicitly.
+3. Then write the Lean 4 axiom declaration including all those conditions as \
+hypotheses, using Lean 4 typeclasses and Mathlib conventions for mathematical \
+structures.
+4. The axiom must be self-contained and mathematically correct even without \
+the parent theorem context.
+
 Return inside a ```lean code block.
 """
 

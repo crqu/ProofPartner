@@ -419,6 +419,50 @@ class TestLemmaBreakdown:
         tree = LemmaTree.model_validate(result.result)
         assert tree.nodes["lemma_1"].from_prior_work
 
+    def test_circular_axiom_guard(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        root_statement = "strong duality for distributionally robust optimization with T=1"
+        child_statement = "Strong duality holds for distributionally robust optimization with T=1"
+        response = (
+            '{"lemmas": [{"node_id": "lemma_5", "statement_nl": "'
+            + child_statement
+            + '", "depends_on": [], "from_prior_work": true, '
+            '"source_reference": "Blanchet & Murthy 2019"}], '
+            '"topological_order": ["lemma_5"]}'
+        )
+        llm = _make_mock_llm([response])
+
+        agent = LemmaBreakdown(llm_client=llm)
+        ctx = AgentContext(task=root_statement, metadata={"statement_lean": ""})
+        result = agent.run(ctx)
+
+        tree = LemmaTree.model_validate(result.result)
+        assert tree.nodes["lemma_5"].from_prior_work is False
+        assert tree.nodes["lemma_5"].source_reference is None
+
+    def test_circular_axiom_guard_allows_genuine_prior_work(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        root_statement = "strong duality for distributionally robust optimization with T=1"
+        child_statement = "Kantorovich-Rubinstein duality for Wasserstein distance"
+        response = (
+            '{"lemmas": [{"node_id": "lemma_1", "statement_nl": "'
+            + child_statement
+            + '", "depends_on": [], "from_prior_work": true, '
+            '"source_reference": "Villani 2009"}], '
+            '"topological_order": ["lemma_1"]}'
+        )
+        llm = _make_mock_llm([response])
+
+        agent = LemmaBreakdown(llm_client=llm)
+        ctx = AgentContext(task=root_statement, metadata={"statement_lean": ""})
+        result = agent.run(ctx)
+
+        tree = LemmaTree.model_validate(result.result)
+        assert tree.nodes["lemma_1"].from_prior_work is True
+        assert tree.nodes["lemma_1"].source_reference == "Villani 2009"
+
 
 # ---------------------------------------------------------------------------
 # agents/lemma_leanifier.py

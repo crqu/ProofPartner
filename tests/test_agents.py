@@ -214,7 +214,7 @@ class TestLLMClient:
             with patch("anthropic.AnthropicVertex") as mock_vertex:
                 client = LLMClient()
                 assert client.is_vertex is True
-                assert client.model == "claude-opus-4-6@20250616"
+                assert client.model == "claude-opus-4-6"
                 mock_vertex.assert_called_once_with(
                     project_id="my-project", region="us-east5"
                 )
@@ -258,11 +258,18 @@ class TestLLMClient:
     def test_normalize_model_for_vertex(self):
         from agentic_research.agents.llm_client import _normalize_model_for_vertex
 
-        assert _normalize_model_for_vertex("claude-opus-4-20250514") == "claude-opus-4@20250514"
-        assert _normalize_model_for_vertex("claude-opus-4-6-20250616") == "claude-opus-4-6@20250616"
-        assert _normalize_model_for_vertex("claude-sonnet-4-20250514") == "claude-sonnet-4@20250514"
+        assert _normalize_model_for_vertex("claude-opus-4-20250514") == "claude-opus-4"
+        assert _normalize_model_for_vertex("claude-opus-4-6-20250616") == "claude-opus-4-6"
+        assert _normalize_model_for_vertex("claude-sonnet-4-20250514") == "claude-sonnet-4"
         assert _normalize_model_for_vertex("custom-model") == "custom-model"
         assert _normalize_model_for_vertex("claude-opus-4@20250514") == "claude-opus-4@20250514"
+
+    def test_vertex_model_normalization_strips_date(self):
+        from agentic_research.agents.llm_client import _normalize_model_for_vertex
+
+        assert _normalize_model_for_vertex("claude-opus-4-6-20250616") == "claude-opus-4-6"
+        assert _normalize_model_for_vertex("claude-opus-4-5") == "claude-opus-4-5"
+        assert _normalize_model_for_vertex("claude-sonnet-4-20250514") == "claude-sonnet-4"
 
     def test_complete_basic(self):
         from agentic_research.agents.llm_client import LLMClient

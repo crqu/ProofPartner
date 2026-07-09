@@ -22,6 +22,33 @@ from agentic_research.models.proof import LemmaTree, NodeStatus, ProofNode
 
 log = get_logger(__name__)
 
+_STOPWORDS = frozenset(
+    {"the", "a", "an", "of", "for", "in", "on", "to", "and", "or", "is", "are",
+     "that", "this", "it", "by", "with", "from", "as", "at", "be", "all", "any",
+     "we", "show", "prove", "holds", "have", "let", "if", "then", "there", "exists"}
+)
+
+SIMILARITY_THRESHOLD = 0.7
+
+
+def _normalize_tokens(text: str) -> set[str]:
+    """Lowercase, split on non-alphanumeric, drop stopwords."""
+    import re as _re
+
+    tokens = _re.findall(r"[a-z0-9]+", text.lower())
+    return {t for t in tokens if t not in _STOPWORDS}
+
+
+def _is_semantically_equivalent(a: str, b: str) -> bool:
+    """Word-overlap similarity check (Jaccard) to detect circular axioms."""
+    tokens_a = _normalize_tokens(a)
+    tokens_b = _normalize_tokens(b)
+    if not tokens_a or not tokens_b:
+        return False
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union) >= SIMILARITY_THRESHOLD
+
 
 class LemmaBreakdown(BaseAgent):
     """Decomposes a theorem into topologically ordered sub-lemmas."""
@@ -90,9 +117,22 @@ class LemmaBreakdown(BaseAgent):
             for item in parsed.get("lemmas", []):
                 node_id = item.get("node_id", f"lemma_{len(nodes)}")
                 is_prior_work = item.get("from_prior_work", False)
+                child_statement_nl = item.get("statement_nl", "")
+
+                if is_prior_work and _is_semantically_equivalent(
+                    child_statement_nl, statement_nl
+                ):
+                    log.warning(
+                        "circular_axiom_guard",
+                        node_id=node_id,
+                        child_statement=child_statement_nl,
+                        root_statement=statement_nl,
+                    )
+                    is_prior_work = False
+
                 child_node = ProofNode(
                     node_id=node_id,
-                    statement_nl=item.get("statement_nl", ""),
+                    statement_nl=child_statement_nl,
                     depth=depth + 1,
                     parent_id=parent_id,
                     status=NodeStatus.PENDING,

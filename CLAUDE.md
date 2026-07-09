@@ -6,7 +6,7 @@
 pip install -e ".[dev]"
 
 # With Vertex AI support
-pip install -e ".[dev]" && pip install 'anthropic[vertex]'
+pip install -e ".[dev,vertex]"
 ```
 
 ### Environment Variables

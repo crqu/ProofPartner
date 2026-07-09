@@ -24,6 +24,9 @@ dev = [
     "pytest-cov>=6.0.0",
     "mypy>=1.14.0",
 ]
+vertex = [
+    "anthropic[vertex]>=0.39.0",
+]
 lean = [
     "lean-dojo>=2.1.0",
 ]

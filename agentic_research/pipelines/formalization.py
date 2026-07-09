@@ -8,6 +8,10 @@ Handles retry logic when the Auctioneer returns RETRY.
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
 from agentic_research.agents.auctioneer import Auctioneer
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.lemma_planner import LemmaPlanner
@@ -52,6 +56,7 @@ class FormalizationPipeline:
         k: int = DEFAULT_K,
         max_retries: int = DEFAULT_MAX_RETRIES,
         prover_config: ProverConfig | None = None,
+        artifact_dir: Path | None = None,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -59,6 +64,7 @@ class FormalizationPipeline:
         self._k = k
         self._max_retries = max_retries
         self._prover_config = prover_config
+        self._artifact_dir = artifact_dir
         self._total_tokens = TokenUsage()
 
     def _accumulate_tokens(self, usage: TokenUsage) -> None:
@@ -109,6 +115,23 @@ class FormalizationPipeline:
                 failure_reason=theorem.failure_reason if theorem else "Theorem formalizer failed",
                 total_token_usage=self._total_tokens,
             )
+
+        if self._artifact_dir is not None:
+            self._artifact_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            theorem_path = self._artifact_dir / f"{timestamp}-theorem.lean"
+            full_theorem = f"{type_defs}\n\n{theorem.lean_statement}"
+            theorem_path.write_text(full_theorem)
+            metadata_path = self._artifact_dir / f"{timestamp}-metadata.json"
+            metadata = {
+                "conjecture_nl": conjecture_nl,
+                "compiles": theorem.compiles,
+                "iterations_used": theorem.iterations_used,
+                "type_imports": theorem.type_imports,
+                "timestamp": timestamp,
+            }
+            metadata_path.write_text(json.dumps(metadata, indent=2))
+            log.info("theorem_artifact_saved", path=str(theorem_path))
 
         # Stage 6: Claim Check
         claim_result = self._run_claim_check(conjecture_nl, theorem.lean_statement, type_defs)

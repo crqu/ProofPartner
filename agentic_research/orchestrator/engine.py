@@ -420,7 +420,11 @@ class ResearchOrchestrator:
         log.info("orchestrator_proving", statement=lean_stmt[:60])
 
         pipeline = ProofPipeline(
-            llm_client=self._llm, lean_repl=self._repl, lean_search=self._search
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            lean_search=self._search,
+            use_proof_critic=self._config.use_proof_critic,
+            use_proof_detailer=self._config.use_proof_detailer,
         )
         result = pipeline.run(lean_stmt, conj.natural_language)
 

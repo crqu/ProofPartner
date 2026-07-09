@@ -234,6 +234,8 @@ class OrchestratorConfig(BaseModel):
     auto_mode: bool = Field(default=True, description="If True, proceed without user input at decision points")
     max_exploration_rounds: int = Field(default=2, ge=1, description="Max times to loop back to Explorer")
     max_reasoning_cycles: int = Field(default=25, ge=1, description="Max stage transitions before halting")
+    use_proof_critic: bool = Field(default=False, description="Enable ProofCritic for lemma decomposition review")
+    use_proof_detailer: bool = Field(default=False, description="Enable ProofDetailer for proof sketch enrichment")
 
 
 class ResearchSessionResult(BaseModel):

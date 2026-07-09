@@ -384,8 +384,10 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
     default="builtin",
     help="Proof backend to use (default: builtin)",
 )
+@click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
+@click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
 @click.pass_context
-def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str) -> None:
+def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool) -> None:
     """Attempt to prove a Lean 4 statement.
 
     Runs ProofPipeline with confirmation prompt before starting.
@@ -437,6 +439,8 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
         lean_search=lean_search,
         use_external_prover=use_external,
         external_prover_config=external_config,
+        use_proof_critic=use_critic,
+        use_proof_detailer=use_detailer,
     )
     start_time = time.monotonic()
 
@@ -482,8 +486,10 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 @click.option("--budget", type=float, default=20.00, help="Budget in USD (default: $20.00)")
 @click.option("--max-conjectures", type=int, default=5, help="Max conjectures to evaluate (default: 5)")
 @click.option("--max-refinements", type=int, default=3, help="Max refinement attempts per conjecture (default: 3)")
+@click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
+@click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
 @click.pass_context
-def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int) -> None:
+def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int, use_critic: bool, use_detailer: bool) -> None:
     """Run the full explore-conjecture-prove research loop.
 
     Automatically explores the idea, generates conjectures, formalizes them
@@ -515,6 +521,8 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
         budget_limit_usd=budget,
         max_conjectures=max_conjectures,
         max_refinements=max_refinements,
+        use_proof_critic=use_critic,
+        use_proof_detailer=use_detailer,
     )
 
     orchestrator = ResearchOrchestrator(

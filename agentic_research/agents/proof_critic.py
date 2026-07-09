@@ -91,6 +91,7 @@ class ProofCritic(BaseAgent):
 
         confirmed, confirm_tokens = self._confirm_issues(
             statement_nl=statement_nl,
+            statement_lean=statement_lean,
             proposed_issues=proposed,
             tree_description=tree_desc,
         )
@@ -137,6 +138,7 @@ class ProofCritic(BaseAgent):
     def _confirm_issues(
         self,
         statement_nl: str,
+        statement_lean: str,
         proposed_issues: list[CritiqueIssue],
         tree_description: str,
     ) -> tuple[list[CritiqueIssue], TokenUsage]:
@@ -146,6 +148,7 @@ class ProofCritic(BaseAgent):
 
         user_content = PROOF_CRITIC_CONFIRM_TEMPLATE.format(
             statement_nl=statement_nl,
+            statement_lean=statement_lean or "-- not yet formalized",
             proposed_issues=issues_json,
             lemma_tree_description=tree_description,
         )
@@ -213,4 +216,6 @@ class ProofCritic(BaseAgent):
             parts.append(
                 f"- {node.node_id}{parent_info}{prior}: {node.statement_nl}"
             )
+            if node.node_id == tree.root_id and node.statement_lean:
+                parts.append(f"  Lean hypotheses: {node.statement_lean}")
         return "\n".join(parts)

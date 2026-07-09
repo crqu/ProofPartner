@@ -1177,6 +1177,13 @@ Return a JSON object:
 }}
 ```
 
+## Important: Inherited Hypotheses
+Sub-lemmas inherit ALL hypotheses from the parent theorem. Before flagging \
+an 'unstated_hypothesis', check whether the parent theorem's Lean 4 statement \
+already includes it. Hypotheses like measurability (Measurable f), \
+integrability, or boundedness assumptions are available to all sub-lemmas \
+when stated in the parent.
+
 ## Guidelines
 - Focus on logical soundness, not style
 - Each issue must be a concrete, testable question
@@ -1205,6 +1212,15 @@ issues you cannot refute.
 
 ## Theorem
 {statement_nl}
+
+## Parent Theorem (Lean 4)
+```lean
+{statement_lean}
+```
+
+When refuting, check whether a proposed 'missing hypothesis' is actually \
+already present as a named hypothesis in the parent theorem above. \
+Sub-lemmas inherit all hypotheses from the parent.
 
 ## Proposed Issues
 {proposed_issues}

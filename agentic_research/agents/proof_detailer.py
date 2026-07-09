@@ -52,8 +52,6 @@ def compute_complexity_score(node: ProofNode) -> int:
     for op in COMPLEXITY_OPERATORS:
         if op in text:
             score += 5
-    score = min(score, score)  # cap is applied per-category above
-
     for phrase in COMPLEXITY_CUE_PHRASES:
         if phrase in text:
             score += 5

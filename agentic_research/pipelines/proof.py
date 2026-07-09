@@ -29,7 +29,10 @@ from agentic_research.models.formalization import ClaimCheckVerdict
 from agentic_research.models.proof import (
     CritiqueResult,
     ErrorCategory,
+    FailureDiagnosis,
+    FailureType,
     LemmaTree,
+    NodeStatus,
     ProofCorrection,
     ProofPipelineResult,
     ProofSearchResult,
@@ -220,6 +223,15 @@ class ProofPipeline:
                     total_token_usage=self._total_tokens,
                 )
 
+            if critique and not critique.passed:
+                blocking = [i for i in critique.issues if i.severity == "blocking"]
+                if blocking:
+                    log.warning(
+                        "proof_critic_exhausted",
+                        blocking_issues=len(blocking),
+                        retries=self._max_critic_retries,
+                    )
+
         if self._use_proof_detailer:
             tree = self._run_proof_detailer(tree)
 
@@ -233,7 +245,8 @@ class ProofPipeline:
                 total_token_usage=self._total_tokens,
             )
 
-        if self._use_claim_check:
+        has_axiom_nodes = any(n.from_prior_work for n in tree.nodes.values())
+        if has_axiom_nodes:
             self._verify_axiom_nodes(tree, statement_nl)
 
         recursive_result = self._run_recursive_prover(tree)
@@ -526,8 +539,13 @@ class ProofPipeline:
                     node_id=node_id,
                     concerns=verdict.all_concerns,
                 )
-                node.statement_lean = ""
+                node.status = NodeStatus.FAILED
+                node.failure_diagnosis = FailureDiagnosis(
+                    failure_type=FailureType.MISSING_HYPOTHESIS,
+                    description=f"Axiom faithfulness check failed: {verdict.all_concerns}",
+                )
                 node.from_prior_work = False
+                node.source_reference = None
 
     def _run_claim_check(self, statement: str, proof_code: str) -> bool:
         checker = ClaimCheck(llm_client=self._llm, use_llm_check=True)

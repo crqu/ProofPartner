@@ -115,6 +115,12 @@ class RecursiveProver(BaseAgent):
         if node.status == NodeStatus.PROVED:
             return True
 
+        if node.from_prior_work:
+            node.status = NodeStatus.PROVED
+            node.proof_code = node.statement_lean
+            log.info("recursive_prover_axiom_skip", node_id=node_id)
+            return True
+
         if node.depth >= self._max_depth:
             log.warning("recursive_prover_depth_limit", node_id=node_id, depth=node.depth)
             node.status = NodeStatus.FAILED

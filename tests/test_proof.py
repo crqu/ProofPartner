@@ -738,6 +738,189 @@ class TestFlattenFinalize:
 # ---------------------------------------------------------------------------
 
 
+class TestVerifyAxiomNodes:
+    """Tests for ProofPipeline._verify_axiom_nodes."""
+
+    def _make_pipeline(self, mock_llm):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+        return ProofPipeline(
+            llm_client=mock_llm,
+            lean_repl=repl,
+            lean_search=search,
+        )
+
+    def test_axiom_node_passes_intent_check(self):
+        from unittest.mock import patch
+
+        from agentic_research.models.verification import IntentVerdict, IntentVerdictType
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main theorem",
+                    statement_lean="theorem main := sorry",
+                    children=["axiom_1"],
+                ),
+                "axiom_1": ProofNode(
+                    node_id="axiom_1",
+                    statement_nl="known result",
+                    statement_lean="theorem known := sorry",
+                    depth=1,
+                    parent_id="root",
+                    from_prior_work=True,
+                    source_reference="Villani 2009",
+                ),
+            },
+            topological_order=["axiom_1", "root"],
+        )
+
+        passing_verdict = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+        )
+
+        llm = _make_mock_llm([])
+        pipeline = self._make_pipeline(llm)
+
+        with patch.object(
+            pipeline, "_verify_axiom_nodes", wraps=pipeline._verify_axiom_nodes
+        ):
+            from agentic_research.agents.intent_judge import IntentJudge
+
+            with patch.object(IntentJudge, "judge", return_value=passing_verdict):
+                pipeline._verify_axiom_nodes(tree, "main theorem")
+
+        node = tree.nodes["axiom_1"]
+        assert node.from_prior_work is True
+        assert node.status == NodeStatus.PENDING
+        assert node.statement_lean == "theorem known := sorry"
+        assert node.source_reference == "Villani 2009"
+
+    def test_axiom_node_fails_intent_check(self):
+        from unittest.mock import patch
+
+        from agentic_research.models.verification import IntentVerdict, IntentVerdictType
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main theorem",
+                    statement_lean="theorem main := sorry",
+                    children=["axiom_1"],
+                ),
+                "axiom_1": ProofNode(
+                    node_id="axiom_1",
+                    statement_nl="known result",
+                    statement_lean="theorem known := sorry",
+                    depth=1,
+                    parent_id="root",
+                    from_prior_work=True,
+                    source_reference="Villani 2009",
+                ),
+            },
+            topological_order=["axiom_1", "root"],
+        )
+
+        failing_verdict = IntentVerdict(
+            overall_verdict=IntentVerdictType.INCORRECT,
+            overall_confidence=0.8,
+            all_concerns=["statement does not match source"],
+        )
+
+        llm = _make_mock_llm([])
+        pipeline = self._make_pipeline(llm)
+
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        with patch.object(IntentJudge, "judge", return_value=failing_verdict):
+            pipeline._verify_axiom_nodes(tree, "main theorem")
+
+        node = tree.nodes["axiom_1"]
+        assert node.status == NodeStatus.FAILED
+        assert node.failure_diagnosis is not None
+        assert "faithfulness" in node.failure_diagnosis.description.lower()
+        assert node.from_prior_work is False
+        assert node.source_reference is None
+        assert node.statement_lean == "theorem known := sorry"
+
+    def test_axiom_node_low_confidence_incorrect_accepted(self):
+        """Low-confidence INCORRECT verdict is accepted with a warning."""
+        from unittest.mock import patch
+
+        from agentic_research.models.verification import IntentVerdict, IntentVerdictType
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main theorem",
+                    statement_lean="theorem main := sorry",
+                    children=["axiom_1"],
+                ),
+                "axiom_1": ProofNode(
+                    node_id="axiom_1",
+                    statement_nl="known result",
+                    statement_lean="theorem known := sorry",
+                    depth=1,
+                    parent_id="root",
+                    from_prior_work=True,
+                    source_reference="Villani 2009",
+                ),
+            },
+            topological_order=["axiom_1", "root"],
+        )
+
+        low_confidence_verdict = IntentVerdict(
+            overall_verdict=IntentVerdictType.INCORRECT,
+            overall_confidence=0.5,
+            all_concerns=["extra hypotheses added"],
+        )
+
+        llm = _make_mock_llm([])
+        pipeline = self._make_pipeline(llm)
+
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        with patch.object(IntentJudge, "judge", return_value=low_confidence_verdict):
+            pipeline._verify_axiom_nodes(tree, "main theorem")
+
+        node = tree.nodes["axiom_1"]
+        assert node.status == NodeStatus.PENDING
+        assert node.from_prior_work is True
+        assert node.source_reference == "Villani 2009"
+
+    def test_non_axiom_nodes_skipped(self):
+        from unittest.mock import patch
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main theorem",
+                    statement_lean="theorem main := sorry",
+                ),
+            },
+            topological_order=["root"],
+        )
+
+        llm = _make_mock_llm([])
+        pipeline = self._make_pipeline(llm)
+
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        with patch.object(IntentJudge, "judge") as mock_judge:
+            pipeline._verify_axiom_nodes(tree, "main theorem")
+            mock_judge.assert_not_called()
+
+
 class TestProofPipeline:
     def test_direct_proof_success(self):
         from agentic_research.pipelines.proof import ProofPipeline

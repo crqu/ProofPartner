@@ -11,6 +11,8 @@ import re
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
+    AXIOM_LEANIFY_SYSTEM,
+    AXIOM_LEANIFY_USER_TEMPLATE,
     LEMMA_LEANIFY_FEEDBACK_TEMPLATE,
     LEMMA_LEANIFY_SYSTEM,
     LEMMA_LEANIFY_USER_TEMPLATE,
@@ -100,6 +102,14 @@ class LemmaLeanifier(BaseAgent):
     def _leanify_node(
         self, node: ProofNode, parent_statement: str, sibling_statements: str
     ) -> tuple[str | None, TokenUsage]:
+        if node.from_prior_work:
+            axiom_code, axiom_tokens = self._axiomatize_node(
+                node, parent_statement, sibling_statements
+            )
+            if axiom_code:
+                return axiom_code, axiom_tokens
+            log.info("axiom_leanify_fallback", node_id=node.node_id)
+
         total_tokens = TokenUsage()
 
         user_content = LEMMA_LEANIFY_USER_TEMPLATE.format(
@@ -108,6 +118,12 @@ class LemmaLeanifier(BaseAgent):
             parent_statement=parent_statement or "-- (root theorem)",
             sibling_statements=sibling_statements or "-- none",
         )
+
+        if node.proof_sketch_nl:
+            user_content += (
+                f"\n\n## Proof Sketch\n{node.proof_sketch_nl}\n"
+                "Use this sketch to inform the Lean statement structure."
+            )
 
         response = self._llm.complete(
             system=LEMMA_LEANIFY_SYSTEM,
@@ -149,6 +165,38 @@ class LemmaLeanifier(BaseAgent):
 
             if compilation.compilation_status == CompilationStatus.OK:
                 return lean_code, total_tokens
+
+        return None, total_tokens
+
+    def _axiomatize_node(
+        self, node: ProofNode, parent_statement: str, sibling_statements: str
+    ) -> tuple[str | None, TokenUsage]:
+        """Produce a Lean 4 axiom declaration for a from_prior_work node."""
+        total_tokens = TokenUsage()
+
+        user_content = AXIOM_LEANIFY_USER_TEMPLATE.format(
+            node_id=node.node_id,
+            statement_nl=node.statement_nl,
+            source_reference=node.source_reference or "unspecified prior work",
+            parent_statement=parent_statement or "-- (root theorem)",
+            sibling_statements=sibling_statements or "-- none",
+        )
+
+        response = self._llm.complete(
+            system=AXIOM_LEANIFY_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+            temperature=0.0,
+            use_cache=True,
+        )
+        total_tokens.input_tokens += response.token_usage.input_tokens
+        total_tokens.output_tokens += response.token_usage.output_tokens
+
+        lean_code = _extract_lean_code(response.content)
+        compilation = self._repl.execute(lean_code)
+
+        if compilation.compilation_status == CompilationStatus.OK:
+            log.info("axiom_leanified", node_id=node.node_id)
+            return lean_code, total_tokens
 
         return None, total_tokens
 

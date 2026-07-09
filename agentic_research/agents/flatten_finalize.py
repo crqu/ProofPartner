@@ -109,10 +109,27 @@ class FlattenFinalize(BaseAgent):
     def _collect_proved_lemmas(self, tree: LemmaTree) -> str:
         """Collect proved lemmas in dependency order (leaves first)."""
         parts = []
+        axiom_count = 0
+        total_count = 0
         for node_id in tree.topological_order:
             node = tree.get_node(node_id)
             if not node or node.node_id == tree.root_id:
                 continue
             if node.status == NodeStatus.PROVED and node.proof_code:
-                parts.append(f"-- {node.node_id}: {node.statement_nl}\n{node.proof_code}")
+                total_count += 1
+                if node.from_prior_work:
+                    axiom_count += 1
+                    kind = "AXIOM (from prior work)"
+                else:
+                    kind = "LEMMA"
+                parts.append(f"-- [{kind}] {node.node_id}: {node.statement_nl}\n{node.proof_code}")
+
+        if total_count > 0 and axiom_count / total_count > 0.3:
+            log.warning(
+                "high_axiom_ratio",
+                axiom_count=axiom_count,
+                total_count=total_count,
+                ratio=round(axiom_count / total_count, 2),
+            )
+
         return "\n\n".join(parts) if parts else "-- no sub-lemmas needed"

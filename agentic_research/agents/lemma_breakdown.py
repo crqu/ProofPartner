@@ -9,6 +9,7 @@ from __future__ import annotations
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
+    CRITIC_FEEDBACK_SECTION,
     LEMMA_BREAKDOWN_SYSTEM,
     LEMMA_BREAKDOWN_USER_TEMPLATE,
 )
@@ -57,18 +58,41 @@ class LemmaBreakdown(BaseAgent):
         super().__init__(name="lemma_breakdown", max_retries=2)
         self._llm = llm_client
 
+    @staticmethod
+    def format_critic_feedback(critic_issues: list[dict]) -> str:
+        """Format critic issues into a string for the prompt."""
+        lines = []
+        for issue in critic_issues:
+            issue_type = issue.get("issue_type", "unknown")
+            node_id = issue.get("node_id", "unknown")
+            description = issue.get("description", "")
+            severity = issue.get("severity", "warning")
+            suggested_fix = issue.get("suggested_fix", "")
+            line = f"- [{severity}] {issue_type} at {node_id}: {description}"
+            if suggested_fix:
+                line += f"\n  Suggested fix: {suggested_fix}"
+            lines.append(line)
+        return "\n".join(lines)
+
     def _execute(self, context: AgentContext) -> AgentResult:
         statement_nl = context.task
         statement_lean = context.metadata.get("statement_lean", "")
         failed_attempts = context.metadata.get("failed_attempts", "None")
         parent_id = context.metadata.get("parent_id", "root")
         depth = context.metadata.get("depth", 0)
+        critic_issues = context.metadata.get("critic_issues", [])
 
         user_content = LEMMA_BREAKDOWN_USER_TEMPLATE.format(
             statement_nl=statement_nl,
             statement_lean=statement_lean,
             failed_attempts=failed_attempts,
         )
+
+        if critic_issues:
+            issues_formatted = self.format_critic_feedback(critic_issues)
+            user_content += CRITIC_FEEDBACK_SECTION.format(
+                issues_formatted=issues_formatted,
+            )
 
         response = self._llm.complete(
             system=LEMMA_BREAKDOWN_SYSTEM,

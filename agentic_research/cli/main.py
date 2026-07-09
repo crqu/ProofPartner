@@ -255,8 +255,9 @@ def explore_cmd(ctx: click.Context, idea: str, budget: float) -> None:
 @cli.command("formalize")
 @click.argument("conjecture")
 @click.option("--budget", type=float, default=3.00, help="Budget in USD (default: $3.00)")
+@click.option("--artifact-dir", type=click.Path(), default=None, help="Directory to save theorem artifacts")
 @click.pass_context
-def formalize_cmd(ctx: click.Context, conjecture: str, budget: float) -> None:
+def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_dir: str | None) -> None:
     """Formalize a natural language conjecture into Lean 4.
 
     Runs FormalizationPipeline + IntentJudge. Takes a natural language
@@ -281,6 +282,7 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float) -> None:
 
     pipeline = FormalizationPipeline(
         llm_client=llm, lean_repl=lean_repl, lean_search=lean_search,
+        artifact_dir=Path(artifact_dir) if artifact_dir else None,
     )
     informalizer = Informalizer(llm_client=llm)
     judge = IntentJudge(llm_client=llm, informalizer=informalizer)

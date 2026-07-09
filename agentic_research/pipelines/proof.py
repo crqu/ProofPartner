@@ -436,7 +436,7 @@ class ProofPipeline:
         )
 
     def _run_claim_check(self, statement: str, proof_code: str) -> bool:
-        checker = ClaimCheck(llm_client=self._llm, use_llm_check=False)
+        checker = ClaimCheck(llm_client=self._llm, use_llm_check=True)
         ctx = AgentContext(
             task=statement,
             metadata={"lean_code": proof_code},

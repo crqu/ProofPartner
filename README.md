@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-599%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-705%20passed-brightgreen.svg)]()
 
 An agentic mathematical research partner that transforms rough mathematical ideas into formal Lean 4 conjectures and discovers proofs.
 
@@ -42,17 +42,19 @@ No Lean 4 or formal verification experience is required. ProofPartner handles fo
 
 ## Competitive Landscape
 
-| User need | ProofPartner | Hilbert / ReProver | LeanDojo | DeepSeek-Prover |
-|---|---|---|---|---|
-| Start from rough idea → conjecture | **Yes** — explore + conjecture generation | No — requires formal input | No — requires formal input | No — requires formal input |
-| Type-first formalization | **Yes** — defines types, then theorem | No | No | No |
-| Intent verification | **Yes** — 3-path adversarial judge | No | No | No |
-| Counterexample search | **Yes** — before proof investment | No | No | No |
-| Prove pre-formalized statements | Supported | **99.2% miniF2F** | **Yes** — retrieval-augmented | **Yes** — MCTS-based |
-| Conjecture refinement on failure | **Yes** — automatic loop | No | No | No |
-| Interactive research sessions | **Yes** — checkpointed, resumable | No | Partial | No |
+| User need | ProofPartner | Numina-Lean-Agent | Hilbert / ReProver | LeanDojo | DeepSeek-Prover |
+|---|---|---|---|---|---|
+| Start from rough idea → conjecture | **Yes** — explore + conjecture generation | No — requires formal input | No — requires formal input | No — requires formal input | No — requires formal input |
+| Type-first formalization | **Yes** — defines types, then theorem | No | No | No | No |
+| Intent verification | **Yes** — 3-path adversarial judge | No | No | No | No |
+| Counterexample search | **Yes** — before proof investment | No | No | No | No |
+| Prove pre-formalized statements | Supported | **Yes** — MCP-based interactive | **99.2% miniF2F** | **Yes** — retrieval-augmented | **Yes** — MCTS-based |
+| Conjecture refinement on failure | **Yes** — automatic loop | Partial — user-driven | No | No | No |
+| Interactive research sessions | **Yes** — checkpointed, resumable | **Yes** — MCP tool server | No | Partial | No |
 
-ProofPartner operates at **Stage 2** (idea → formal conjecture → proof), while most existing tools operate at **Stage 1** (formal statement → proof). Use ProofPartner when you don't yet have a Lean 4 statement; use Hilbert or ReProver when you do.
+*Note: 2026 systems (Goedel-Prover-V2, Kimina-Prover-72B, BFS-Prover) achieve 73–92% on miniF2F but operate only on pre-formalized statements.*
+
+ProofPartner operates at **Stage 1** (idea → formal conjecture → proof), while most existing tools operate at **Stage 2** (formal statement → proof). Numina-Lean-Agent is the closest competitor with a similar interactive workflow. Use ProofPartner when you don't yet have a Lean 4 statement; use Hilbert or ReProver when you do.
 
 ## Evaluation
 
@@ -97,11 +99,19 @@ pip install -e ".[dev,vertex]"
 | `CLAUDE_CODE_USE_VERTEX=1` | Enable Vertex AI backend |
 | `ANTHROPIC_VERTEX_PROJECT_ID` | Google Cloud project for Vertex AI |
 | `ANTHROPIC_VERTEX_REGION` | Vertex region (default: `us-east5`) |
-| `AGENTIC_RESEARCH_MODEL` | Override default model (default: `claude-opus-4-6-20250616`) |
+| `AGENTIC_RESEARCH_MODEL` | Override default model (default: `claude-opus-4-6`). Use dateless IDs for Vertex AI compatibility |
 
 ### Lean 4 (optional)
 
-Install [elan](https://github.com/leanprover/elan) for real proof verification. Without it, Lean operations use mocked backends (sufficient for exploration, conjecture generation, and formalization — not for verified proofs).
+Install [elan](https://github.com/leanprover/elan) for real proof verification:
+
+```bash
+curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh
+```
+
+Without Lean 4, the CLI still works for exploration, conjecture generation, and formalization
+using mocked backends. Proof verification requires real Lean 4.
+ProofPartner will warn you if Lean is not found when running formalize/prove/research commands.
 
 ## CLI Usage
 
@@ -125,6 +135,18 @@ agentic-research research 'every sufficiently large even number is the sum of tw
 
 # Show current session state
 agentic-research status
+
+# Prove with ProofCritic + ProofDetailer (recommended for complex theorems)
+agentic-research prove 'your theorem statement' --use-critic --use-detailer --budget 10.00
+
+# Resume an interrupted research session
+agentic-research resume <session-id>
+
+# List available sessions to resume
+agentic-research resume --list
+
+# Override the LLM model (use dateless IDs for Vertex AI)
+agentic-research --model claude-opus-4-6 explore 'my idea'
 ```
 
 For a step-by-step walkthrough, see the [Tutorial](docs/TUTORIAL.md). For programmatic usage, see the [API Guide](docs/API.md).
@@ -176,6 +198,19 @@ survived  disproved → Conjecture Refiner → loop back
 
 For a detailed description of each stage, agent inventory, data flow, and cost control architecture, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+### Proof Pipeline (with --use-critic --use-detailer)
+
+When proving complex theorems, the pipeline decomposes and validates:
+
+1. **ProofSearch** — tries automated tactics, then iterative proving (3 strategies × 5 iterations)
+2. **ProofCorrector** — analyzes compilation errors, suggests fixes, retries
+3. **ClaimCheck** — rejects unsound proofs (falls through to decomposition)
+4. **LemmaBreakdown** — decomposes theorem into sub-lemmas
+5. **ProofCritic** — identifies which sub-lemmas are prior work (e.g., Kantorovich duality)
+6. **ProofDetailer** — enriches proof sketches with mathematical detail
+7. **LemmaLeanifier** — translates sub-lemmas to Lean 4 (with domain-specific data packages)
+8. **RecursiveProver** — composes axiomatized sub-lemmas into root proof via `have` tactic
+
 ## Production Hardening
 
 - **Default budgets on all commands** — no unlimited operations; every command has a cost cap
@@ -183,6 +218,9 @@ For a detailed description of each stage, agent inventory, data flow, and cost c
 - **Tiered session memory** — hot/warm/cold tiers keep the most relevant context in working memory
 - **Checkpointing at all 8 pipeline stages** — exploring, conjecturing, formalizing, checking intent, searching counterexamples, proving, refining, complete
 - **Session resume** — `CheckpointManager` persists state so interrupted sessions can resume from the last checkpoint
+- **Verifier-guided self-correction** — Lean compiler errors fed back as structured feedback to retry loop
+- **Progress tracking** — `rich.Progress` shows real-time pipeline stage, elapsed time, and cost
+- **Data package injection** — domain-specific Lean 4 definitions auto-detected and injected for formalization quality
 
 ## Package Structure
 
@@ -195,6 +233,7 @@ agentic_research/
 ├── orchestrator/  # Central orchestrator + state management
 ├── cli/           # Click CLI entry points
 ├── memory/        # Research session memory
+├── data_packages/ # Domain-specific Lean 4 preambles (DRO coupling, etc.)
 └── models/        # Pydantic data models
 ```
 
@@ -244,6 +283,10 @@ See also [CITATION.cff](CITATION.cff) for machine-readable citation metadata.
 - **[miniF2F](https://github.com/openai/miniF2F)** — cross-system benchmark for formal olympiad-level mathematics
 - **[Mathlib](https://leanprover-community.github.io/mathlib4_docs/)** — Lean 4's comprehensive mathematics library
 - **[Hilbert](https://arxiv.org/abs/2502.11842)** — 99.2% on miniF2F using whole-proof generation
+- **[Numina-Lean-Agent](https://github.com/project-numina/numina-lean-agent)** — MCP-based agent for Lean 4, 100% on Putnam 2025 (closest Stage 1 competitor)
+- **[Goedel-Prover-V2](https://arxiv.org/abs/2508.03613)** — 90.4% miniF2F with verifier-guided self-correction
+- **[Kimina-Prover-72B](https://huggingface.co/AI-MO/Kimina-Prover-72B)** — RL-trained with structured `have` proofs, 92.2% miniF2F
+- **[BFS-Prover](https://arxiv.org/abs/2502.03438)** — 73% miniF2F, validates simple search over MCTS
 
 ## Documentation
 

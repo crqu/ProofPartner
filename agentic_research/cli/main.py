@@ -496,7 +496,7 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
             use_proof_detailer=use_detailer,
             progress_callback=on_prove_progress,
         )
-        result = pipeline.run(lean_statement=lean_statement)
+        result = pipeline.run(lean_statement=lean_statement, statement_nl=lean_statement)
 
         elapsed = time.monotonic() - start_time
         tokens = result.total_token_usage

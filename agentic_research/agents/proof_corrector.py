@@ -69,7 +69,7 @@ PROOF_CORRECTOR_USER_TEMPLATE = """\
 ## Prior Attempts
 {prior_attempts}
 
-Analyze the error and suggest a correction.
+{compiler_feedback}Analyze the error and suggest a correction.
 """
 
 
@@ -88,23 +88,39 @@ class ProofCorrector(BaseAgent):
         error_message: str,
         lean_goal_state: str,
         prior_attempts: list[str] | None = None,
+        compiler_errors: list[str] | None = None,
     ) -> ProofCorrection:
         """Analyze a failed proof and return a structured correction."""
         log.info(
             "proof_corrector_start",
             error_len=len(error_message),
             prior_count=len(prior_attempts) if prior_attempts else 0,
+            compiler_error_count=len(compiler_errors) if compiler_errors else 0,
         )
 
         prior_text = "\n".join(
             f"Attempt {i + 1}:\n```lean\n{a}\n```" for i, a in enumerate(prior_attempts)
         ) if prior_attempts else "None"
 
+        if compiler_errors:
+            feedback_lines = ["## Previous Compiler Errors"]
+            for i, err in enumerate(compiler_errors, 1):
+                feedback_lines.append(f"{i}. {err}")
+            feedback_lines.append("")
+            feedback_lines.append(
+                "IMPORTANT: Your correction MUST avoid repeating these errors. "
+                "Each error above represents a failed approach — do not retry it.\n\n"
+            )
+            compiler_feedback = "\n".join(feedback_lines)
+        else:
+            compiler_feedback = ""
+
         user_content = PROOF_CORRECTOR_USER_TEMPLATE.format(
             failed_proof=failed_proof,
             error_message=error_message,
             lean_goal_state=lean_goal_state,
             prior_attempts=prior_text,
+            compiler_feedback=compiler_feedback,
         )
 
         response = self._llm.complete(
@@ -151,12 +167,14 @@ class ProofCorrector(BaseAgent):
         error_message = context.metadata.get("error_message", "")
         lean_goal_state = context.metadata.get("lean_goal_state", "")
         prior_attempts = context.metadata.get("prior_attempts", [])
+        compiler_errors = context.metadata.get("compiler_errors", []) or None
 
         correction = self.correct(
             failed_proof=failed_proof,
             error_message=error_message,
             lean_goal_state=lean_goal_state,
             prior_attempts=prior_attempts,
+            compiler_errors=compiler_errors,
         )
 
         return AgentResult(

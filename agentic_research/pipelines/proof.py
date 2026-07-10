@@ -415,6 +415,20 @@ class ProofPipeline:
             return result.result.get("final_proof")
         return None
 
+    @staticmethod
+    def _extract_compiler_errors(search_result: ProofSearchResult) -> list[str]:
+        """Extract structured compiler error strings from a failed proof search."""
+        errors: list[str] = []
+        if search_result.failure_reason:
+            errors.append(search_result.failure_reason)
+        for strategy in search_result.strategies_tried:
+            tactic_desc = ", ".join(strategy.key_tactics) if strategy.key_tactics else "none"
+            errors.append(
+                f"Strategy '{strategy.strategy_type.value}' failed "
+                f"(tactics: [{tactic_desc}]): {strategy.description}"
+            )
+        return errors
+
     def _try_proof_correction(
         self, statement: str, search_result: ProofSearchResult
     ) -> ProofCorrection | None:
@@ -434,11 +448,18 @@ class ProofPipeline:
             last_proof = statement
         error_msg = search_result.failure_reason or "Proof search exhausted all strategies"
 
+        compiler_errors = self._extract_compiler_errors(search_result)
+        log.info(
+            "proof_correction_compiler_errors",
+            error_count=len(compiler_errors),
+        )
+
         corrector = ProofCorrector(llm_client=self._llm)
         correction = corrector.correct(
             failed_proof=last_proof,
             error_message=error_msg,
             lean_goal_state=statement,
+            compiler_errors=compiler_errors if compiler_errors else None,
         )
         self._accumulate_tokens(corrector.cumulative_tokens)
 
@@ -464,10 +485,19 @@ class ProofPipeline:
             f"Revised sketch:\n{correction.revised_proof_sketch}"
         )
 
+        compiler_feedback = (
+            f"## Compiler Feedback\n"
+            f"Error category: {correction.error_category.value}\n"
+            f"Error message: {correction.error_message}\n"
+            f"Constraint: Do NOT repeat this error — "
+            f"avoid the {correction.error_category.value} pattern described above."
+        )
+
         augmented_task = (
             f"{statement}\n\n"
             f"[Correction context from previous failed attempt]\n"
-            f"{correction_hint}"
+            f"{correction_hint}\n\n"
+            f"{compiler_feedback}"
         )
 
         agent = ProofSearchAgent(

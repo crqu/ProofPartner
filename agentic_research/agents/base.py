@@ -66,7 +66,7 @@ class BaseAgent(ABC):
 
     def run(self, context: AgentContext) -> AgentResult:
         """Execute the agent with retry logic and structured logging."""
-        log.info("agent_run_start", agent=self._name, task_len=len(context.task))
+        log.info("agent_run_start", agent=self._name, task_len=len(context.task), task_preview=context.task[:120])
         start = time.monotonic()
         last_error: str | None = None
 

@@ -49,11 +49,31 @@ class LemmaLeanifier(BaseAgent):
         lean_repl: LeanRepl,
         *,
         max_compile_retries: int = MAX_COMPILE_RETRIES,
+        lean_preamble: str | None = None,
     ) -> None:
         super().__init__(name="lemma_leanifier", max_retries=1)
         self._llm = llm_client
         self._repl = lean_repl
         self._max_compile_retries = max_compile_retries
+        self._lean_preamble = lean_preamble
+
+    def _compile(self, lean_code: str):
+        """Execute lean_code in the REPL, prepending the preamble if set."""
+        if self._lean_preamble:
+            full_code = self._lean_preamble + "\n\n" + lean_code
+        else:
+            full_code = lean_code
+        return self._repl.execute(full_code)
+
+    def _definitions_context(self) -> str:
+        """Return an LLM prompt section describing available definitions."""
+        if not self._lean_preamble:
+            return ""
+        return (
+            "\n\n## Available Definitions\n"
+            "The following Lean 4 definitions are already in scope:\n"
+            + self._lean_preamble
+        )
 
     def _execute(self, context: AgentContext) -> AgentResult:
         tree_data = context.metadata.get("lemma_tree")
@@ -125,6 +145,8 @@ class LemmaLeanifier(BaseAgent):
                 "Use this sketch to inform the Lean statement structure."
             )
 
+        user_content += self._definitions_context()
+
         response = self._llm.complete(
             system=LEMMA_LEANIFY_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
@@ -135,7 +157,7 @@ class LemmaLeanifier(BaseAgent):
         total_tokens.output_tokens += response.token_usage.output_tokens
 
         lean_code = _extract_lean_code(response.content)
-        compilation = self._repl.execute(lean_code)
+        compilation = self._compile(lean_code)
 
         if compilation.compilation_status == CompilationStatus.OK:
             return lean_code, total_tokens
@@ -161,7 +183,7 @@ class LemmaLeanifier(BaseAgent):
             total_tokens.output_tokens += response.token_usage.output_tokens
 
             lean_code = _extract_lean_code(response.content)
-            compilation = self._repl.execute(lean_code)
+            compilation = self._compile(lean_code)
 
             if compilation.compilation_status == CompilationStatus.OK:
                 return lean_code, total_tokens
@@ -182,6 +204,8 @@ class LemmaLeanifier(BaseAgent):
             sibling_statements=sibling_statements or "-- none",
         )
 
+        user_content += self._definitions_context()
+
         response = self._llm.complete(
             system=AXIOM_LEANIFY_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
@@ -192,7 +216,7 @@ class LemmaLeanifier(BaseAgent):
         total_tokens.output_tokens += response.token_usage.output_tokens
 
         lean_code = _extract_lean_code(response.content)
-        compilation = self._repl.execute(lean_code)
+        compilation = self._compile(lean_code)
 
         if compilation.compilation_status == CompilationStatus.OK:
             log.info("axiom_leanified", node_id=node.node_id)

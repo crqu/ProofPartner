@@ -83,6 +83,8 @@ class ProofPipeline:
         self._use_proof_detailer = use_proof_detailer
         self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
+        self._statement_nl: str = ""
+        self._lean_preamble: str | None = None
 
     def _notify_progress(self, stage: str, message: str) -> None:
         if self._progress_callback is not None:
@@ -94,9 +96,26 @@ class ProofPipeline:
         self._total_tokens.cache_creation_input_tokens += usage.cache_creation_input_tokens
         self._total_tokens.cache_read_input_tokens += usage.cache_read_input_tokens
 
+    _DRO_KEYWORDS = frozenset([
+        "wasserstein", "coupling", "distributionally robust",
+        "probability measure", "transport cost",
+    ])
+
+    def _detect_lean_preamble(self, statement_nl: str) -> str | None:
+        """Return the DRO data-package preamble if NL statement matches keywords."""
+        lower = statement_nl.lower()
+        if any(kw in lower for kw in self._DRO_KEYWORDS):
+            from agentic_research.data_packages import get_package
+            pkg = get_package("dro_coupling")
+            if pkg is not None:
+                return pkg.lean_preamble()
+        return None
+
     def run(self, lean_statement: str, statement_nl: str = "") -> ProofPipelineResult:
         """Execute the full proof pipeline."""
         pipeline_start = time.monotonic()
+        self._statement_nl = statement_nl
+        self._lean_preamble = self._detect_lean_preamble(statement_nl)
         log.info("proof_pipeline_start", statement_len=len(lean_statement))
 
         self._notify_progress("Proof Search", "Starting proof search")
@@ -380,7 +399,11 @@ class ProofPipeline:
         return None
 
     def _run_lemma_leanifier(self, tree: LemmaTree) -> LemmaTree | None:
-        agent = LemmaLeanifier(llm_client=self._llm, lean_repl=self._repl)
+        agent = LemmaLeanifier(
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            lean_preamble=self._lean_preamble,
+        )
         ctx = AgentContext(
             task="leanify lemmas",
             metadata={"lemma_tree": tree.model_dump()},
@@ -398,6 +421,7 @@ class ProofPipeline:
             prover_config=self._prover_config,
             max_depth=self._max_depth,
             max_retries_per_node=self._max_retries_per_node,
+            lean_preamble=self._lean_preamble,
         )
         ctx = AgentContext(
             task="prove recursively",

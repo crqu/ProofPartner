@@ -845,6 +845,61 @@ class TestOrchestratorCostTracking:
         assert result.total_token_usage.input_tokens == 10000
 
 
+class TestOrchestratorProgressCallback:
+    def test_accepts_progress_callback(self):
+        from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+        calls = []
+        orch = ResearchOrchestrator(
+            llm_client=_make_mock_llm(),
+            lean_repl=_make_mock_repl(),
+            lean_search=_make_mock_search(),
+            progress_callback=lambda stage, msg: calls.append((stage, msg)),
+        )
+        assert orch._progress_callback is not None
+
+    def test_callback_called_on_stage_transitions(self):
+        from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+        calls = []
+        config = OrchestratorConfig(max_conjectures=1)
+        orch = ResearchOrchestrator(
+            llm_client=_make_mock_llm(),
+            lean_repl=_make_mock_repl(),
+            lean_search=_make_mock_search(),
+            config=config,
+            progress_callback=lambda stage, msg: calls.append((stage, msg)),
+        )
+
+        with (
+            patch.object(orch, "_handle_exploring", wraps=lambda r: _mock_exploring(orch, r)),
+            patch.object(orch, "_handle_conjecturing", wraps=lambda r: _mock_conjecturing(orch, r)),
+            patch.object(orch, "_handle_formalizing", wraps=lambda r: _mock_formalizing_success(orch, r)),
+            patch.object(orch, "_handle_checking_intent", wraps=lambda r: _mock_intent_ok(orch)),
+            patch.object(orch, "_handle_searching_counterexample", wraps=lambda r: _mock_cx_plausible(orch)),
+            patch.object(orch, "_handle_proving", wraps=lambda r: _mock_proving_success(orch)),
+        ):
+            orch.run("test idea")
+
+        stages = [stage for stage, _ in calls]
+        assert "exploring" in stages
+        assert "conjecturing" in stages
+
+    def test_none_callback_does_not_crash(self):
+        from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+        config = OrchestratorConfig(budget_limit_usd=0.0)
+        orch = ResearchOrchestrator(
+            llm_client=_make_mock_llm(),
+            lean_repl=_make_mock_repl(),
+            lean_search=_make_mock_search(),
+            config=config,
+        )
+        orch._total_tokens = TokenUsage(input_tokens=100000, output_tokens=50000)
+        result = orch.run("idea")
+        assert result.final_stage == PipelineStage.FAILED
+
+
 class TestOrchestratorProperties:
     def test_session_id(self):
         from agentic_research.orchestrator.engine import ResearchOrchestrator

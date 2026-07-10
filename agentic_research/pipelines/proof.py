@@ -9,6 +9,7 @@ Integrates ClaimCheck at each node to verify statement preservation.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
@@ -64,6 +65,7 @@ class ProofPipeline:
         use_proof_critic: bool = False,
         max_critic_retries: int = 2,
         use_proof_detailer: bool = False,
+        progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -78,7 +80,12 @@ class ProofPipeline:
         self._use_proof_critic = use_proof_critic
         self._max_critic_retries = max_critic_retries
         self._use_proof_detailer = use_proof_detailer
+        self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
+
+    def _notify_progress(self, stage: str, message: str) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(stage, message)
 
     def _accumulate_tokens(self, usage: TokenUsage) -> None:
         self._total_tokens.input_tokens += usage.input_tokens
@@ -90,6 +97,8 @@ class ProofPipeline:
         """Execute the full proof pipeline."""
         pipeline_start = time.monotonic()
         log.info("proof_pipeline_start", statement_len=len(lean_statement))
+
+        self._notify_progress("Proof Search", "Starting proof search")
 
         if self._use_external_prover and self._external_prover_config is not None:
             ext_result = self._run_external_prover(lean_statement)
@@ -191,6 +200,7 @@ class ProofPipeline:
             )
 
         log.info("proof_pipeline_decomposing")
+        self._notify_progress("Lemma Breakdown", "Decomposing into lemmas")
 
         tree = self._run_lemma_breakdown(lean_statement, statement_nl, search_result)
         if tree is None:
@@ -236,6 +246,7 @@ class ProofPipeline:
         if self._use_proof_detailer:
             tree = self._run_proof_detailer(tree)
 
+        self._notify_progress("Leanification", "Converting lemmas to Lean 4")
         tree = self._run_lemma_leanifier(tree)
         if tree is None:
             return ProofPipelineResult(
@@ -250,6 +261,7 @@ class ProofPipeline:
         if has_axiom_nodes:
             self._verify_axiom_nodes(tree, statement_nl)
 
+        self._notify_progress("Recursive Prover", "Proving lemmas recursively")
         recursive_result = self._run_recursive_prover(tree)
 
         if not recursive_result.proved or not recursive_result.lemma_tree:
@@ -262,6 +274,7 @@ class ProofPipeline:
                 total_token_usage=self._total_tokens,
             )
 
+        self._notify_progress("Finalization", "Assembling final proof")
         final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
         if not final_proof:
             return ProofPipelineResult(

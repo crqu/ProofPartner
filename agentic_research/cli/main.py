@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from agentic_research import __version__
@@ -280,14 +281,26 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
 
     from agentic_research.pipelines.formalization import FormalizationPipeline
 
-    pipeline = FormalizationPipeline(
-        llm_client=llm, lean_repl=lean_repl, lean_search=lean_search,
-        artifact_dir=Path(artifact_dir) if artifact_dir else None,
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
     )
     informalizer = Informalizer(llm_client=llm)
     judge = IntentJudge(llm_client=llm, informalizer=informalizer)
 
-    with console.status(f"{_cost_display(cost_tracker, budget)} Formalizing: {conjecture[:60]}...") as status:
+    with progress:
+        task_id = progress.add_task(f"Formalizing: {conjecture[:60]}...", total=None)
+
+        def on_formalize_progress(stage: str, message: str) -> None:
+            progress.update(task_id, description=f"[bold]{stage}[/bold] — {message}")
+
+        pipeline = FormalizationPipeline(
+            llm_client=llm, lean_repl=lean_repl, lean_search=lean_search,
+            artifact_dir=Path(artifact_dir) if artifact_dir else None,
+            progress_callback=on_formalize_progress,
+        )
         form_result = pipeline.run(conjecture_nl=conjecture)
 
         tokens = form_result.total_token_usage
@@ -297,7 +310,7 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
             cache_read_tokens=tokens.cache_read_input_tokens,
             cache_write_tokens=tokens.cache_creation_input_tokens,
         )
-        status.update(f"{_cost_display(cost_tracker, budget)} Formalization complete, checking intent...")
+        progress.update(task_id, description=f"{_cost_display(cost_tracker, budget)} Checking intent...")
 
         if not form_result.success or form_result.theorem is None:
             console.print(f"[red]Formalization failed:[/red] {form_result.failure_reason or 'unknown error'}")
@@ -433,18 +446,30 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 
     from agentic_research.pipelines.proof import ProofPipeline
 
-    pipeline = ProofPipeline(
-        llm_client=llm,
-        lean_repl=lean_repl,
-        lean_search=lean_search,
-        use_external_prover=use_external,
-        external_prover_config=external_config,
-        use_proof_critic=use_critic,
-        use_proof_detailer=use_detailer,
-    )
     start_time = time.monotonic()
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    )
 
-    with console.status(f"{_cost_display(cost_tracker, budget)} Starting proof search...") as status:
+    with progress:
+        task_id = progress.add_task("Starting proof search...", total=None)
+
+        def on_prove_progress(stage: str, message: str) -> None:
+            progress.update(task_id, description=f"[bold]{stage}[/bold] — {message}")
+
+        pipeline = ProofPipeline(
+            llm_client=llm,
+            lean_repl=lean_repl,
+            lean_search=lean_search,
+            use_external_prover=use_external,
+            external_prover_config=external_config,
+            use_proof_critic=use_critic,
+            use_proof_detailer=use_detailer,
+            progress_callback=on_prove_progress,
+        )
         result = pipeline.run(lean_statement=lean_statement)
 
         elapsed = time.monotonic() - start_time
@@ -455,7 +480,7 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
             cache_read_tokens=tokens.cache_read_input_tokens,
             cache_write_tokens=tokens.cache_creation_input_tokens,
         )
-        status.update(f"{_cost_display(cost_tracker, budget)} Proof search complete ({elapsed:.1f}s)")
+        progress.update(task_id, description=f"{_cost_display(cost_tracker, budget)} Proof search complete ({elapsed:.1f}s)")
 
     if _check_budget(cost_tracker, budget):
         console.print("[yellow]Budget exceeded during proof search.[/yellow]")
@@ -525,20 +550,33 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
         use_proof_detailer=use_detailer,
     )
 
-    orchestrator = ResearchOrchestrator(
-        llm_client=llm,
-        lean_repl=lean_repl,
-        lean_search=lean_search,
-        config=config,
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
     )
 
-    try:
-        with console.status(f"[bold]Researching:[/bold] {idea[:60]}...") as status:
+    with progress:
+        task_id = progress.add_task(f"Researching: {idea[:60]}...", total=None)
+
+        def on_research_progress(stage: str, message: str) -> None:
+            progress.update(task_id, description=f"[bold]{stage}[/bold] — {message}")
+
+        orchestrator = ResearchOrchestrator(
+            llm_client=llm,
+            lean_repl=lean_repl,
+            lean_search=lean_search,
+            config=config,
+            progress_callback=on_research_progress,
+        )
+
+        try:
             result = orchestrator.run(idea)
-            status.update("[bold]Research complete.[/bold]")
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Interrupted.[/yellow]")
-        result = orchestrator._build_result(idea)
+            progress.update(task_id, description="[bold]Research complete.[/bold]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted.[/yellow]")
+            result = orchestrator._build_result(idea)
 
     if result.final_stage == PipelineStage.COMPLETE:
         console.print("\n[green bold]RESEARCH COMPLETE[/green bold]")

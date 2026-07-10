@@ -360,6 +360,29 @@ class TestProveCommand:
         assert "FAILED" in result.output
         assert "recursive_prover" in result.output
 
+    def test_prove_passes_statement_nl(self, runner, tmp_session_dir):
+        """prove_cmd must pass statement_nl to ProofPipeline.run so data-package detection works."""
+        from agentic_research.models.proof import ProofPipelineResult
+
+        proof_result = ProofPipelineResult(
+            statement="DRO theorem statement",
+            proved=True,
+            final_proof="sorry",
+        )
+
+        with (
+            patch("agentic_research.cli.main._create_llm_client") as mock_llm,
+            patch("agentic_research.cli.main._create_lean_repl"),
+            patch("agentic_research.cli.main._create_lean_search"),
+            patch("agentic_research.pipelines.proof.ProofPipeline.run", return_value=proof_result) as mock_run,
+        ):
+            mock_llm.return_value = MagicMock()
+            stmt = "For all distributions in the DRO ambiguity set, the worst-case risk is bounded"
+            result = runner.invoke(cli, ["prove", stmt], input="y\n")
+
+        assert result.exit_code == 0
+        mock_run.assert_called_once_with(lean_statement=stmt, statement_nl=stmt)
+
     def test_prove_timeout(self, runner, tmp_session_dir):
         from agentic_research.models.proof import ProofPipelineResult
 

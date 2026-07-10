@@ -24,9 +24,20 @@ from agentic_research.models.formalization import (
     TypeDependencyGraph,
     TypePlan,
 )
+from agentic_research.models.tools import ToolStatus
 from agentic_research.tools.lean_search import LeanSearch
 
 log = get_logger(__name__)
+
+MATHLIB_GROUNDING_QUERIES: list[str] = [
+    "Measure.fst",
+    "Measure.snd",
+    "ProbabilityMeasure",
+    "iSup",
+    "iInf",
+    "ConcaveOn",
+    "Measure.map",
+]
 
 
 class TypePlanner(BaseAgent):
@@ -48,6 +59,16 @@ class TypePlanner(BaseAgent):
         search_result = self._search.execute(conjecture[:120])
         mathlib_summary = self._format_search(search_result)
 
+        mathlib_grounded = self._query_mathlib_grounding()
+        if mathlib_grounded:
+            grounded_lines = [
+                f"- **{name}**: `{sig}` [from Mathlib]"
+                for name, sig in mathlib_grounded.items()
+            ]
+            mathlib_summary += "\n\n## Confirmed Mathlib Definitions\n" + "\n".join(
+                grounded_lines
+            )
+
         user_content = TYPE_PLANNER_USER_TEMPLATE.format(
             conjecture=conjecture,
             mathlib_results=mathlib_summary,
@@ -62,10 +83,13 @@ class TypePlanner(BaseAgent):
 
         plan = self._parse_response(response.content, conjecture)
 
+        plan = self._apply_mathlib_grounding(plan, mathlib_grounded)
+
         log.info(
             "type_planner_done",
             num_candidates=len(plan.candidates),
             num_new_types=sum(1 for c in plan.candidates if not c.is_in_mathlib),
+            num_from_mathlib=sum(1 for c in plan.candidates if c.is_in_mathlib),
         )
 
         return AgentResult(
@@ -74,6 +98,52 @@ class TypePlanner(BaseAgent):
             result=plan.model_dump(),
             token_usage=response.token_usage,
         )
+
+    def _query_mathlib_grounding(self) -> dict[str, str]:
+        """Query Loogle/LeanSearch for known measure-theoretic identifiers.
+
+        Returns a mapping of identifier name to type signature for those
+        confirmed present in Mathlib.
+        """
+        found: dict[str, str] = {}
+        for query in MATHLIB_GROUNDING_QUERIES:
+            result = self._search.execute(query)
+            if result.status != ToolStatus.SUCCESS:
+                continue
+            entries = getattr(result, "entries", [])
+            for entry in entries:
+                if entry.name and query.lower() in entry.name.lower():
+                    found[entry.name] = entry.type_signature
+                    break
+        log.info(
+            "mathlib_grounding_done",
+            queries=len(MATHLIB_GROUNDING_QUERIES),
+            found=len(found),
+        )
+        return found
+
+    def _apply_mathlib_grounding(
+        self,
+        plan: TypePlan,
+        grounded: dict[str, str],
+    ) -> TypePlan:
+        """Upgrade candidates whose names match confirmed Mathlib identifiers
+        to from_mathlib status, preventing unnecessary axiomatization."""
+        if not grounded:
+            return plan
+        grounded_lower = {k.lower(): k for k in grounded}
+        for candidate in plan.candidates:
+            key = candidate.name.lower()
+            if key in grounded_lower:
+                original = grounded_lower[key]
+                candidate.is_in_mathlib = True
+                candidate.mathlib_analog = original
+                candidate.lean_signature = grounded[original]
+            elif candidate.mathlib_analog:
+                analog_lower = candidate.mathlib_analog.lower()
+                if analog_lower in grounded_lower:
+                    candidate.is_in_mathlib = True
+        return plan
 
     def _format_search(self, search_result) -> str:
         entries = getattr(search_result, "entries", [])

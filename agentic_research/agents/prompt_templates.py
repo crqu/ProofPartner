@@ -626,6 +626,14 @@ Then write the Lean 4 code.
 - Include all necessary type annotations
 - Prefer composing existing Mathlib types over inventing new definitions
 
+## Syntax Constraints
+- Use `iSup`/`iInf` combinators for suprema/infima, NOT set-builder \
+`{x | ...}` notation — set-builder syntax causes parse errors in \
+theorem statements with complex binder types
+- Use `⨆`/`⨅` notation (which desugars to iSup/iInf) when appropriate
+- For bounded suprema/infima, use `iSup`/`iInf` with a lambda, e.g. \
+`iSup fun (γ : CouplingType) => ...` rather than `sSup {f γ | γ : CouplingType}`
+
 ## Output Format
 Return ONLY the Lean 4 code inside a ```lean code block.
 The code should include all imports and the theorem statement.

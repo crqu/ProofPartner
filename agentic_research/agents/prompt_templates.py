@@ -1342,12 +1342,35 @@ Break this lemma into 3-5 intermediate sub-claims, each provable in \
 
 PARENT_PROOF_SYSTEM = """\
 You are an expert Lean 4 theorem prover. Prove a parent theorem \
-assuming its child lemmas are true (they appear as `sorry` premises).
+assuming its child lemmas are true (they appear as axiom declarations \
+or `sorry` premises).
 
 ## Key Insight
 The child lemmas are available as hypotheses. Your job is to show \
 the parent theorem follows from these lemmas, NOT to prove the lemmas \
 themselves.
+
+## How to Use Child Lemmas
+To use a child lemma in your proof, invoke it with the `have` tactic \
+or `apply`/`exact`. Reference each child lemma BY NAME with the \
+correct arguments.
+
+### Example 1 — Using a universally quantified lemma
+```lean
+axiom foo : ∀ n : Nat, n + 0 = n
+
+-- In your proof:
+have h1 := foo 5        -- instantiates n with 5
+have h2 : 3 + 0 = 3 := foo 3
+```
+
+### Example 2 — Using a lemma with complex types
+```lean
+axiom bar : ∀ (P : Measure X) (ε : ℝ), wassersteinDist P P0 ≤ ε → P ∈ WassersteinBall P0 ε
+
+-- In your proof:
+have membership : P1 ∈ WassersteinBall P0 0.5 := bar P1 0.5 dist_proof
+```
 
 ## Output Format
 Return ONLY the Lean 4 proof code inside a ```lean code block. \

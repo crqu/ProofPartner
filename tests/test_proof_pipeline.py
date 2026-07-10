@@ -413,3 +413,105 @@ class TestPipelineCompilerFeedback:
         else:
             prompt = str(search_call)
         assert "Compiler Feedback" in prompt or True
+
+
+# ---------------------------------------------------------------------------
+# Claim-check failure falls through to decomposition
+# ---------------------------------------------------------------------------
+
+
+class TestClaimCheckFallthrough:
+    """When claim_check fails on a compiled proof, pipeline should fall through
+    to the decomposition path rather than returning immediately."""
+
+    def test_direct_proof_claim_check_failure_falls_through_to_decomposition(self):
+        """Direct proof compiles but claim_check fails → decomposition runs."""
+        from unittest.mock import patch
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        pipeline = _make_pipeline(use_claim_check=True)
+
+        direct_search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=True,
+            proof_code="theorem foo : True := trivial",
+            needs_decomposition=False,
+        )
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=direct_search_result), \
+             patch.object(pipeline, "_run_claim_check", return_value=False), \
+             patch.object(pipeline, "_run_lemma_breakdown", return_value=None) as mock_breakdown:
+            result = pipeline.run("theorem foo : True")
+
+        mock_breakdown.assert_called_once()
+        assert result.failure_stage == "lemma_breakdown"
+
+    def test_corrected_proof_claim_check_failure_falls_through_to_decomposition(self):
+        """Corrected proof compiles but claim_check fails → decomposition runs."""
+        from unittest.mock import patch
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        pipeline = _make_pipeline(use_claim_check=True)
+
+        failed_search_result = ProofSearchResult(
+            statement="theorem bar : True",
+            proved=False,
+            needs_decomposition=True,
+            failure_reason="All strategies exhausted",
+            strategies_tried=[
+                ProofStrategy(
+                    strategy_type=StrategyType.DIRECT,
+                    description="simp failed",
+                    key_tactics=["simp"],
+                ),
+            ],
+        )
+
+        correction = ProofCorrection(
+            error_category=ErrorCategory.TACTIC_FAILURE,
+            error_message="simp failed",
+            suggested_tactics=["trivial"],
+            revised_proof_sketch="by trivial",
+            confidence=0.9,
+            reasoning="use trivial",
+        )
+
+        corrected_search_result = ProofSearchResult(
+            statement="theorem bar : True",
+            proved=True,
+            proof_code="theorem bar : True := trivial",
+            needs_decomposition=False,
+        )
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=failed_search_result), \
+             patch.object(pipeline, "_try_proof_correction", return_value=correction), \
+             patch.object(pipeline, "_run_proof_search_with_correction", return_value=corrected_search_result), \
+             patch.object(pipeline, "_run_claim_check", return_value=False), \
+             patch.object(pipeline, "_run_lemma_breakdown", return_value=None) as mock_breakdown:
+            result = pipeline.run("theorem bar : True")
+
+        mock_breakdown.assert_called_once()
+        assert result.failure_stage == "lemma_breakdown"
+
+    def test_direct_proof_claim_check_pass_still_returns_success(self):
+        """Direct proof with passing claim_check still returns success."""
+        from unittest.mock import patch
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        pipeline = _make_pipeline(use_claim_check=True)
+
+        direct_search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=True,
+            proof_code="theorem foo : True := trivial",
+        )
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=direct_search_result), \
+             patch.object(pipeline, "_run_claim_check", return_value=True):
+            result = pipeline.run("theorem foo : True")
+
+        assert result.proved
+        assert result.claim_check_passed

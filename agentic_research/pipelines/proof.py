@@ -125,52 +125,46 @@ class ProofPipeline:
             )
 
         search_result = self._run_proof_search(lean_statement)
+        force_decomposition = False
 
         if search_result.proved and search_result.proof_code:
+            direct_ok = True
             if self._use_claim_check:
                 passed = self._run_claim_check(lean_statement, search_result.proof_code)
                 if not passed:
                     log.warning("proof_pipeline_claim_check_failed_direct")
-                    return ProofPipelineResult(
-                        statement=lean_statement,
-                        search_result=search_result,
-                        claim_check_passed=False,
-                        failure_stage="claim_check",
-                        failure_reason="Claim check failed on direct proof",
-                        total_token_usage=self._total_tokens,
-                    )
+                    direct_ok = False
+                    force_decomposition = True
 
-            log.info("proof_pipeline_direct_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
-            return ProofPipelineResult(
-                statement=lean_statement,
-                proved=True,
-                final_proof=search_result.proof_code,
-                search_result=search_result,
-                claim_check_passed=True,
-                total_token_usage=self._total_tokens,
-            )
+            if direct_ok:
+                log.info("proof_pipeline_direct_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
+                return ProofPipelineResult(
+                    statement=lean_statement,
+                    proved=True,
+                    final_proof=search_result.proof_code,
+                    search_result=search_result,
+                    claim_check_passed=True,
+                    total_token_usage=self._total_tokens,
+                )
 
-        correction = self._try_proof_correction(lean_statement, search_result)
-        if correction is not None:
-            corrected_result = self._run_proof_search_with_correction(
-                lean_statement, correction
-            )
-            if corrected_result.proved and corrected_result.proof_code:
-                if self._use_claim_check:
-                    passed = self._run_claim_check(
-                        lean_statement, corrected_result.proof_code
-                    )
-                    if not passed:
-                        log.warning("proof_pipeline_claim_check_failed_corrected")
-                        return ProofPipelineResult(
-                            statement=lean_statement,
-                            search_result=corrected_result,
-                            claim_check_passed=False,
-                            failure_stage="claim_check",
-                            failure_reason="Claim check failed on corrected proof",
-                            total_token_usage=self._total_tokens,
+        if not force_decomposition:
+            correction = self._try_proof_correction(lean_statement, search_result)
+            if correction is not None:
+                corrected_result = self._run_proof_search_with_correction(
+                    lean_statement, correction
+                )
+                if corrected_result.proved and corrected_result.proof_code:
+                    corrected_ok = True
+                    if self._use_claim_check:
+                        passed = self._run_claim_check(
+                            lean_statement, corrected_result.proof_code
                         )
-                    else:
+                        if not passed:
+                            log.warning("proof_pipeline_claim_check_failed_corrected")
+                            corrected_ok = False
+                            force_decomposition = True
+
+                    if corrected_ok:
                         log.info("proof_pipeline_corrected_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
                         return ProofPipelineResult(
                             statement=lean_statement,
@@ -180,18 +174,8 @@ class ProofPipeline:
                             claim_check_passed=True,
                             total_token_usage=self._total_tokens,
                         )
-                else:
-                    log.info("proof_pipeline_corrected_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
-                    return ProofPipelineResult(
-                        statement=lean_statement,
-                        proved=True,
-                        final_proof=corrected_result.proof_code,
-                        search_result=corrected_result,
-                        claim_check_passed=True,
-                        total_token_usage=self._total_tokens,
-                    )
 
-        if not search_result.needs_decomposition:
+        if not search_result.needs_decomposition and not force_decomposition:
             return ProofPipelineResult(
                 statement=lean_statement,
                 search_result=search_result,

@@ -9,6 +9,7 @@ Handles retry logic when the Auctioneer returns RETRY.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,6 +58,7 @@ class FormalizationPipeline:
         max_retries: int = DEFAULT_MAX_RETRIES,
         prover_config: ProverConfig | None = None,
         artifact_dir: Path | None = None,
+        progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -65,7 +67,12 @@ class FormalizationPipeline:
         self._max_retries = max_retries
         self._prover_config = prover_config
         self._artifact_dir = artifact_dir
+        self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
+
+    def _notify_progress(self, stage: str, message: str) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(stage, message)
 
     def _accumulate_tokens(self, usage: TokenUsage) -> None:
         self._total_tokens.input_tokens += usage.input_tokens
@@ -78,6 +85,7 @@ class FormalizationPipeline:
         log.info("formalization_pipeline_start", conjecture_len=len(conjecture_nl))
 
         # Stage 1: Type Planning
+        self._notify_progress("Type Planning", "Planning types for formalization")
         type_plan = self._run_type_planner(conjecture_nl)
         if type_plan is None:
             return FormalizationPipelineResult(
@@ -88,9 +96,11 @@ class FormalizationPipeline:
             )
 
         # Stage 2: Lemma Planning
+        self._notify_progress("Lemma Planning", "Planning auxiliary lemmas")
         lemmas_by_type = self._run_lemma_planner(type_plan)
 
         # Stage 3 + 4: Type Formalization + Auction (with retries)
+        self._notify_progress("Type Formalization", "Formalizing types with auction")
         type_result = self._run_type_formalization(type_plan, lemmas_by_type)
         if not type_result.all_types_accepted:
             return FormalizationPipelineResult(
@@ -102,6 +112,7 @@ class FormalizationPipeline:
             )
 
         # Stage 5: Theorem Formalization
+        self._notify_progress("Theorem Formalization", "Formalizing theorem statement")
         type_defs = "\n\n".join(
             t.lean_code for t in type_result.accepted_types
         )
@@ -134,6 +145,7 @@ class FormalizationPipeline:
             log.info("theorem_artifact_saved", path=str(theorem_path))
 
         # Stage 6: Claim Check
+        self._notify_progress("Claim Check", "Verifying formalization preserves intent")
         claim_result = self._run_claim_check(conjecture_nl, theorem.lean_statement, type_defs)
         if claim_result and claim_result.verdict == ClaimCheckVerdict.FAIL:
             return FormalizationPipelineResult(

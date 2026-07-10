@@ -13,6 +13,7 @@ routing between pipeline stages based on outcomes:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 
 from agentic_research.agents.conjecturer import ConjectureGenerator
 from agentic_research.agents.counterexample_searcher import CounterexampleSearcher
@@ -57,12 +58,14 @@ class ResearchOrchestrator:
         lean_search: LeanSearch,
         config: OrchestratorConfig | None = None,
         session_id: str | None = None,
+        progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
         self._search = lean_search
         self._config = config or OrchestratorConfig()
         self._session_id = session_id or uuid.uuid4().hex[:12]
+        self._progress_callback = progress_callback
 
         self._state_machine = PipelineStateMachine()
         self._memory = ResearchSessionMemory(self._session_id)
@@ -103,6 +106,10 @@ class ResearchOrchestrator:
     @property
     def cost_tracker(self) -> CostTracker:
         return self._cost_tracker
+
+    def _notify_progress(self, stage: str, message: str) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(stage, message)
 
     def run(self, raw_idea: str) -> ResearchSessionResult:
         """Execute the full explore-conjecture-prove loop."""
@@ -197,6 +204,7 @@ class ResearchOrchestrator:
 
             self._reasoning_cycles += 1
             stage = self._state_machine.current_stage
+            self._notify_progress(stage.value, f"Entering {stage.value}")
 
             self._checkpoint_current_stage()
 
@@ -320,7 +328,8 @@ class ResearchOrchestrator:
         log.info("orchestrator_formalizing", conjecture=conj.statement[:60])
 
         pipeline = FormalizationPipeline(
-            llm_client=self._llm, lean_repl=self._repl, lean_search=self._search
+            llm_client=self._llm, lean_repl=self._repl, lean_search=self._search,
+            progress_callback=self._progress_callback,
         )
         result = pipeline.run(conj.natural_language)
 
@@ -425,6 +434,7 @@ class ResearchOrchestrator:
             lean_search=self._search,
             use_proof_critic=self._config.use_proof_critic,
             use_proof_detailer=self._config.use_proof_detailer,
+            progress_callback=self._progress_callback,
         )
         result = pipeline.run(lean_stmt, conj.natural_language)
 

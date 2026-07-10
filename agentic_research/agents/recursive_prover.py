@@ -64,6 +64,7 @@ class RecursiveProver(BaseAgent):
         prover_config: ProverConfig | None = None,
         max_depth: int = DEFAULT_MAX_DEPTH,
         max_retries_per_node: int = DEFAULT_MAX_RETRIES_PER_NODE,
+        lean_preamble: str | None = None,
     ) -> None:
         super().__init__(name="recursive_prover", max_retries=1)
         self._llm = llm_client
@@ -71,6 +72,7 @@ class RecursiveProver(BaseAgent):
         self._prover_config = prover_config or ProverConfig()
         self._max_depth = max_depth
         self._max_retries_per_node = max_retries_per_node
+        self._lean_preamble = lean_preamble
 
     def _execute(self, context: AgentContext) -> AgentResult:
         tree_data = context.metadata.get("lemma_tree")
@@ -259,7 +261,8 @@ class RecursiveProver(BaseAgent):
         tokens.output_tokens += response.token_usage.output_tokens
 
         proof_code = _extract_lean_code(response.content)
-        compilation = self._repl.execute(proof_code)
+        compile_code = (self._lean_preamble + "\n\n" + proof_code) if self._lean_preamble else proof_code
+        compilation = self._repl.execute(compile_code)
 
         uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
         if compilation.compilation_status == CompilationStatus.OK and not uses_sorry:

@@ -515,3 +515,160 @@ class TestClaimCheckFallthrough:
 
         assert result.proved
         assert result.claim_check_passed
+
+
+# ---------------------------------------------------------------------------
+# Data-package preamble wiring
+# ---------------------------------------------------------------------------
+
+
+class TestLemmaLeanifierPreamble:
+    """Verify LemmaLeanifier uses lean_preamble for compilation and LLM context."""
+
+    @staticmethod
+    def _make_leanifier_tree():
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        return LemmaTree(
+            root_id="root",
+            topological_order=["sub-1", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root theorem",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["sub-1"],
+                ),
+                "sub-1": ProofNode(
+                    node_id="sub-1",
+                    statement_nl="sublemma about coupling",
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+
+    def test_preamble_prepended_before_compilation(self):
+        from unittest.mock import patch
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+
+        lean_response = "```lean\ntheorem sub_1 : True := sorry\n```"
+        llm = _make_mock_llm([lean_response])
+        repl = _make_mock_repl()
+
+        preamble = "import Mathlib\ndef wassersteinDist := sorry"
+        agent = LemmaLeanifier(
+            llm_client=llm,
+            lean_repl=repl,
+            lean_preamble=preamble,
+        )
+
+        tree = self._make_leanifier_tree()
+        ctx = AgentContext(
+            task="leanify lemmas",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+
+        with patch.object(repl, "execute", wraps=repl.execute) as spy:
+            agent.run(ctx)
+            assert spy.call_count >= 1
+            compiled_code = spy.call_args_list[0][0][0]
+            assert compiled_code.startswith(preamble)
+
+    def test_preamble_included_in_llm_prompt(self):
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+
+        lean_response = "```lean\ntheorem sub_1 : True := sorry\n```"
+        llm = _make_mock_llm([lean_response])
+        repl = _make_mock_repl()
+
+        preamble = "def wassersteinDist := sorry"
+        agent = LemmaLeanifier(
+            llm_client=llm,
+            lean_repl=repl,
+            lean_preamble=preamble,
+        )
+
+        tree = self._make_leanifier_tree()
+        ctx = AgentContext(
+            task="leanify lemmas",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        call_args = llm.complete.call_args
+        prompt_content = call_args[1]["messages"][0]["content"]
+        assert "Available Definitions" in prompt_content
+        assert "wassersteinDist" in prompt_content
+
+    def test_no_preamble_no_definitions_section(self):
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+
+        lean_response = "```lean\ntheorem sub_1 : True := sorry\n```"
+        llm = _make_mock_llm([lean_response])
+        repl = _make_mock_repl()
+
+        agent = LemmaLeanifier(llm_client=llm, lean_repl=repl)
+
+        tree = self._make_leanifier_tree()
+        ctx = AgentContext(
+            task="leanify lemmas",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        call_args = llm.complete.call_args
+        prompt_content = call_args[1]["messages"][0]["content"]
+        assert "Available Definitions" not in prompt_content
+
+
+class TestProofPipelineDRODetection:
+    """Verify ProofPipeline auto-detects DRO keywords and passes preamble."""
+
+    def test_dro_keywords_trigger_preamble(self):
+        pipeline = _make_pipeline()
+        preamble = pipeline._detect_lean_preamble(
+            "The Wasserstein distance between two probability measures"
+        )
+        assert preamble is not None
+        assert "wassersteinDist" in preamble
+
+    def test_coupling_keyword_triggers_preamble(self):
+        pipeline = _make_pipeline()
+        preamble = pipeline._detect_lean_preamble(
+            "For any coupling of mu and nu"
+        )
+        assert preamble is not None
+
+    def test_distributionally_robust_triggers_preamble(self):
+        pipeline = _make_pipeline()
+        preamble = pipeline._detect_lean_preamble(
+            "In the distributionally robust optimization setting"
+        )
+        assert preamble is not None
+
+    def test_non_dro_statement_no_preamble(self):
+        pipeline = _make_pipeline()
+        preamble = pipeline._detect_lean_preamble(
+            "For all natural numbers n, n + 0 = n"
+        )
+        assert preamble is None
+
+    def test_empty_statement_no_preamble(self):
+        pipeline = _make_pipeline()
+        preamble = pipeline._detect_lean_preamble("")
+        assert preamble is None
+
+    def test_run_stores_statement_nl_and_preamble(self):
+        from unittest.mock import patch
+
+        pipeline = _make_pipeline()
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value="trivial"):
+            pipeline.run(
+                "theorem foo : True",
+                statement_nl="The Wasserstein ball has bounded diameter",
+            )
+
+        assert pipeline._statement_nl == "The Wasserstein ball has bounded diameter"
+        assert pipeline._lean_preamble is not None

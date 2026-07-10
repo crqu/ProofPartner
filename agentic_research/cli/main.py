@@ -76,6 +76,18 @@ def _check_budget(cost_tracker: CostTracker, budget: float) -> bool:
     return cost_tracker.total_cost() > budget
 
 
+def _validate_positive(ctx, param, value):
+    if value <= 0:
+        raise click.BadParameter(f"must be greater than 0, got {value}")
+    return value
+
+
+def _validate_non_negative(ctx, param, value):
+    if value < 0:
+        raise click.BadParameter(f"must be non-negative, got {value}")
+    return value
+
+
 def _cost_display(cost_tracker: CostTracker, budget: float) -> str:
     return f"[cost: ${cost_tracker.total_cost():.2f} / ${budget:.2f}]"
 
@@ -483,9 +495,9 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 
 @cli.command("research")
 @click.argument("idea")
-@click.option("--budget", type=float, default=20.00, help="Budget in USD (default: $20.00)")
-@click.option("--max-conjectures", type=int, default=5, help="Max conjectures to evaluate (default: 5)")
-@click.option("--max-refinements", type=int, default=3, help="Max refinement attempts per conjecture (default: 3)")
+@click.option("--budget", type=float, default=20.00, callback=_validate_positive, help="Budget in USD (default: $20.00)")
+@click.option("--max-conjectures", type=int, default=5, callback=_validate_positive, help="Max conjectures to evaluate (default: 5)")
+@click.option("--max-refinements", type=int, default=3, callback=_validate_non_negative, help="Max refinement attempts per conjecture (default: 3)")
 @click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
 @click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
 @click.pass_context
@@ -571,6 +583,125 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
 
     console.print(f"\n[dim]Session: {result.session_id}[/dim]")
     console.print(f"[dim]Resume with: agentic-research resume {result.session_id}[/dim]")
+
+
+@cli.command("resume")
+@click.argument("session_id", required=False, default=None)
+@click.option("--list", "list_sessions", is_flag=True, help="List available sessions with their stages")
+@click.option("--budget", type=float, default=20.00, help="Budget in USD (default: $20.00)")
+@click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
+@click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
+@click.pass_context
+def resume_cmd(
+    ctx: click.Context,
+    session_id: str | None,
+    list_sessions: bool,
+    budget: float,
+    use_critic: bool,
+    use_detailer: bool,
+) -> None:
+    """Resume a previously interrupted research session.
+
+    Loads the last checkpoint for a session and continues from the last
+    completed stage. Use --list to show available sessions.
+    """
+    from agentic_research.orchestrator.rollback import CheckpointManager, DEFAULT_CHECKPOINT_DIR
+
+    if list_sessions:
+        if not DEFAULT_CHECKPOINT_DIR.exists():
+            console.print("[yellow]No sessions found.[/yellow]")
+            return
+
+        session_dirs = sorted(
+            d for d in DEFAULT_CHECKPOINT_DIR.iterdir() if d.is_dir()
+        )
+        if not session_dirs:
+            console.print("[yellow]No sessions found.[/yellow]")
+            return
+
+        table = Table(title="Available Sessions")
+        table.add_column("Session ID", style="bold")
+        table.add_column("Checkpoints", justify="right")
+        table.add_column("Last Stage")
+
+        for session_dir in session_dirs:
+            mgr = CheckpointManager(session_id=session_dir.name, persist=False)
+            mgr._session_id = session_dir.name
+            checkpoint_ids = mgr.list_disk_checkpoints()
+            last_stage = "unknown"
+            if checkpoint_ids:
+                last_ckpt = mgr.latest_disk_checkpoint()
+                if last_ckpt:
+                    last_stage = last_ckpt.stage.value
+            table.add_row(session_dir.name, str(len(checkpoint_ids)), last_stage)
+
+        console.print(table)
+        return
+
+    if session_id is None:
+        console.print("[red]Error:[/red] Please provide a session ID or use --list to see available sessions.")
+        raise SystemExit(1)
+
+    mgr = CheckpointManager(session_id=session_id, persist=True)
+    checkpoint = mgr.latest_disk_checkpoint()
+    if checkpoint is None:
+        console.print(f"[red]Error:[/red] No checkpoints found for session '{session_id}'.")
+        raise SystemExit(1)
+
+    console.print(f"[bold]Resuming session:[/bold] {session_id}")
+    console.print(f"[dim]Checkpoint: {checkpoint.checkpoint_id} | Stage: {checkpoint.stage.value}[/dim]")
+
+    from agentic_research.models.session import (
+        OrchestratorConfig,
+        PipelineStage,
+    )
+    from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+    try:
+        llm = _create_llm_client(model=ctx.obj.get("model"))
+        lean_repl = _create_lean_repl()
+        lean_search = _create_lean_search()
+    except Exception as e:
+        console.print(f"[red]Setup error:[/red] {e}")
+        sys.exit(1)
+
+    config = OrchestratorConfig(
+        budget_limit_usd=budget,
+        use_proof_critic=use_critic,
+        use_proof_detailer=use_detailer,
+    )
+
+    orchestrator = ResearchOrchestrator(
+        llm_client=llm,
+        lean_repl=lean_repl,
+        lean_search=lean_search,
+        config=config,
+        session_id=session_id,
+    )
+
+    try:
+        with console.status(f"[bold]Resuming from {checkpoint.stage.value}...[/bold]") as status:
+            result = orchestrator.resume_from_checkpoint(checkpoint.checkpoint_id)
+            status.update("[bold]Research complete.[/bold]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        result = orchestrator._build_result(checkpoint.session_state.raw_idea)
+
+    if result.final_stage == PipelineStage.COMPLETE:
+        console.print("\n[green bold]RESEARCH COMPLETE[/green bold]")
+    else:
+        console.print("\n[yellow bold]RESEARCH INCOMPLETE[/yellow bold]")
+
+    stats_table = Table(title="Research Results", show_header=False)
+    stats_table.add_column("Metric", style="bold")
+    stats_table.add_column("Value")
+    stats_table.add_row("Stage reached", result.final_stage.value)
+    stats_table.add_row("Conjectures tried", str(result.total_conjectures_tried))
+    stats_table.add_row("Proofs succeeded", str(len(result.proved_conjectures)))
+    stats_table.add_row("Total cost", f"${result.cost_estimate.total_cost_usd:.4f}")
+    console.print(stats_table)
+
+    console.print(f"\n[dim]Session: {result.session_id}[/dim]")
 
 
 @cli.command("status")

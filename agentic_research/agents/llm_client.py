@@ -29,14 +29,14 @@ OPENAI_ENABLED = os.environ.get("OPENAI_ENABLED", "false").lower() in ("true", "
 
 
 def _normalize_model_for_vertex(model: str) -> str:
-    """Convert a direct-API model ID to Vertex AI format.
+    """Strip date suffix from model ID for Vertex AI.
 
-    Direct API:  claude-opus-4-20250514
-    Vertex AI:   claude-opus-4@20250514  (@ replaces the last hyphen before the date)
+    Direct API:  claude-opus-4-6-20250616
+    Vertex AI:   claude-opus-4-6  (dateless — Vertex rejects @date and -date forms)
     """
     match = re.match(r"^(claude-.+)-(\d{8})$", model)
     if match:
-        return f"{match.group(1)}@{match.group(2)}"
+        return match.group(1)
     return model
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
+    CRITIC_FEEDBACK_SECTION,
     LEMMA_BREAKDOWN_SYSTEM,
     LEMMA_BREAKDOWN_USER_TEMPLATE,
 )
@@ -22,6 +23,33 @@ from agentic_research.models.proof import LemmaTree, NodeStatus, ProofNode
 
 log = get_logger(__name__)
 
+_STOPWORDS = frozenset(
+    {"the", "a", "an", "of", "for", "in", "on", "to", "and", "or", "is", "are",
+     "that", "this", "it", "by", "with", "from", "as", "at", "be", "all", "any",
+     "we", "show", "prove", "holds", "have", "let", "if", "then", "there", "exists"}
+)
+
+SIMILARITY_THRESHOLD = 0.7
+
+
+def _normalize_tokens(text: str) -> set[str]:
+    """Lowercase, split on non-alphanumeric, drop stopwords."""
+    import re as _re
+
+    tokens = _re.findall(r"[a-z0-9]+", text.lower())
+    return {t for t in tokens if t not in _STOPWORDS}
+
+
+def _is_semantically_equivalent(a: str, b: str) -> bool:
+    """Word-overlap similarity check (Jaccard) to detect circular axioms."""
+    tokens_a = _normalize_tokens(a)
+    tokens_b = _normalize_tokens(b)
+    if not tokens_a or not tokens_b:
+        return False
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union) >= SIMILARITY_THRESHOLD
+
 
 class LemmaBreakdown(BaseAgent):
     """Decomposes a theorem into topologically ordered sub-lemmas."""
@@ -30,18 +58,41 @@ class LemmaBreakdown(BaseAgent):
         super().__init__(name="lemma_breakdown", max_retries=2)
         self._llm = llm_client
 
+    @staticmethod
+    def format_critic_feedback(critic_issues: list[dict]) -> str:
+        """Format critic issues into a string for the prompt."""
+        lines = []
+        for issue in critic_issues:
+            issue_type = issue.get("issue_type", "unknown")
+            node_id = issue.get("node_id", "unknown")
+            description = issue.get("description", "")
+            severity = issue.get("severity", "warning")
+            suggested_fix = issue.get("suggested_fix", "")
+            line = f"- [{severity}] {issue_type} at {node_id}: {description}"
+            if suggested_fix:
+                line += f"\n  Suggested fix: {suggested_fix}"
+            lines.append(line)
+        return "\n".join(lines)
+
     def _execute(self, context: AgentContext) -> AgentResult:
         statement_nl = context.task
         statement_lean = context.metadata.get("statement_lean", "")
         failed_attempts = context.metadata.get("failed_attempts", "None")
         parent_id = context.metadata.get("parent_id", "root")
         depth = context.metadata.get("depth", 0)
+        critic_issues = context.metadata.get("critic_issues", [])
 
         user_content = LEMMA_BREAKDOWN_USER_TEMPLATE.format(
             statement_nl=statement_nl,
             statement_lean=statement_lean,
             failed_attempts=failed_attempts,
         )
+
+        if critic_issues:
+            issues_formatted = self.format_critic_feedback(critic_issues)
+            user_content += CRITIC_FEEDBACK_SECTION.format(
+                issues_formatted=issues_formatted,
+            )
 
         response = self._llm.complete(
             system=LEMMA_BREAKDOWN_SYSTEM,
@@ -90,9 +141,22 @@ class LemmaBreakdown(BaseAgent):
             for item in parsed.get("lemmas", []):
                 node_id = item.get("node_id", f"lemma_{len(nodes)}")
                 is_prior_work = item.get("from_prior_work", False)
+                child_statement_nl = item.get("statement_nl", "")
+
+                if is_prior_work and _is_semantically_equivalent(
+                    child_statement_nl, statement_nl
+                ):
+                    log.warning(
+                        "circular_axiom_guard",
+                        node_id=node_id,
+                        child_statement=child_statement_nl,
+                        root_statement=statement_nl,
+                    )
+                    is_prior_work = False
+
                 child_node = ProofNode(
                     node_id=node_id,
-                    statement_nl=item.get("statement_nl", ""),
+                    statement_nl=child_statement_nl,
                     depth=depth + 1,
                     parent_id=parent_id,
                     status=NodeStatus.PENDING,

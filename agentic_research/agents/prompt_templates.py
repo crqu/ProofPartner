@@ -1068,6 +1068,16 @@ Statement (Lean 4):
 Decompose this theorem into simpler sub-lemmas. Return as JSON.
 """
 
+CRITIC_FEEDBACK_SECTION = """\
+
+## Previous Issues Identified by Proof Critic
+
+The following issues were found in your previous decomposition. Address \
+these in your revised version:
+
+{issues_formatted}
+"""
+
 LEMMA_LEANIFY_SYSTEM = """\
 You are an expert Lean 4 programmer. Translate a natural language lemma \
 into a Lean 4 theorem statement with `sorry` as the proof body.

@@ -27,6 +27,7 @@ from agentic_research.models.agents import AgentContext, AgentStatus, ProverConf
 from agentic_research.models.external_prover import ExternalProverConfig
 from agentic_research.models.formalization import ClaimCheckVerdict
 from agentic_research.models.proof import (
+    CritiqueIssue,
     CritiqueResult,
     ErrorCategory,
     FailureDiagnosis,
@@ -204,15 +205,18 @@ class ProofPipeline:
         if self._use_proof_critic:
             critique = self._run_proof_critic(tree, statement_nl, lean_statement)
             if critique and not critique.passed:
+                critic_issues = critique.issues
                 for _retry in range(self._max_critic_retries):
                     tree = self._run_lemma_breakdown(
-                        lean_statement, statement_nl, search_result
+                        lean_statement, statement_nl, search_result,
+                        critic_feedback=critic_issues,
                     )
                     if tree is None:
                         break
                     critique = self._run_proof_critic(tree, statement_nl, lean_statement)
                     if critique is None or critique.passed:
                         break
+                    critic_issues = critique.issues
 
             if tree is None:
                 return ProofPipelineResult(
@@ -350,19 +354,26 @@ class ProofPipeline:
         lean_statement: str,
         statement_nl: str,
         search_result: ProofSearchResult,
+        critic_feedback: list[CritiqueIssue] | None = None,
     ) -> LemmaTree | None:
         failed_strategies = "\n".join(
             f"- {s.strategy_type.value}: {s.description}"
             for s in search_result.strategies_tried
         )
 
+        metadata: dict = {
+            "statement_lean": lean_statement,
+            "failed_attempts": failed_strategies or "None",
+        }
+        if critic_feedback:
+            metadata["critic_issues"] = [
+                issue.model_dump() for issue in critic_feedback
+            ]
+
         agent = LemmaBreakdown(llm_client=self._llm)
         ctx = AgentContext(
             task=statement_nl or lean_statement,
-            metadata={
-                "statement_lean": lean_statement,
-                "failed_attempts": failed_strategies or "None",
-            },
+            metadata=metadata,
         )
         result = agent.run(ctx)
         self._accumulate_tokens(agent.cumulative_tokens)

@@ -17,6 +17,9 @@ from agentic_research.models.agents import (
     TokenUsage,
 )
 from agentic_research.models.proof import (
+    CritiqueIssue,
+    CritiqueIssueType,
+    CritiqueResult,
     FailureDiagnosis,
     FailureType,
     LemmaTree,
@@ -418,6 +421,50 @@ class TestLemmaBreakdown:
 
         tree = LemmaTree.model_validate(result.result)
         assert tree.nodes["lemma_1"].from_prior_work
+
+    def test_circular_axiom_guard(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        root_statement = "strong duality for distributionally robust optimization with T=1"
+        child_statement = "Strong duality holds for distributionally robust optimization with T=1"
+        response = (
+            '{"lemmas": [{"node_id": "lemma_5", "statement_nl": "'
+            + child_statement
+            + '", "depends_on": [], "from_prior_work": true, '
+            '"source_reference": "Blanchet & Murthy 2019"}], '
+            '"topological_order": ["lemma_5"]}'
+        )
+        llm = _make_mock_llm([response])
+
+        agent = LemmaBreakdown(llm_client=llm)
+        ctx = AgentContext(task=root_statement, metadata={"statement_lean": ""})
+        result = agent.run(ctx)
+
+        tree = LemmaTree.model_validate(result.result)
+        assert tree.nodes["lemma_5"].from_prior_work is False
+        assert tree.nodes["lemma_5"].source_reference is None
+
+    def test_circular_axiom_guard_allows_genuine_prior_work(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        root_statement = "strong duality for distributionally robust optimization with T=1"
+        child_statement = "Kantorovich-Rubinstein duality for Wasserstein distance"
+        response = (
+            '{"lemmas": [{"node_id": "lemma_1", "statement_nl": "'
+            + child_statement
+            + '", "depends_on": [], "from_prior_work": true, '
+            '"source_reference": "Villani 2009"}], '
+            '"topological_order": ["lemma_1"]}'
+        )
+        llm = _make_mock_llm([response])
+
+        agent = LemmaBreakdown(llm_client=llm)
+        ctx = AgentContext(task=root_statement, metadata={"statement_lean": ""})
+        result = agent.run(ctx)
+
+        tree = LemmaTree.model_validate(result.result)
+        assert tree.nodes["lemma_1"].from_prior_work is True
+        assert tree.nodes["lemma_1"].source_reference == "Villani 2009"
 
 
 # ---------------------------------------------------------------------------
@@ -1044,3 +1091,192 @@ class TestPhase7PromptTemplates:
         )
         assert "weak_child_lemma" in rendered
         assert "strengthen" in rendered
+
+
+# ---------------------------------------------------------------------------
+# ProofCritic retry feedback (B-072)
+# ---------------------------------------------------------------------------
+
+
+class TestCriticFeedbackFormatting:
+    def test_format_critic_feedback(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        issues = [
+            {
+                "issue_type": "unstated_hypothesis",
+                "node_id": "lemma_1",
+                "description": "Assumes x > 0 without stating it",
+                "severity": "blocking",
+                "suggested_fix": "Add hypothesis x > 0",
+            },
+            {
+                "issue_type": "weak_child_lemma",
+                "node_id": "lemma_2",
+                "description": "Lemma is too weak to prove parent",
+                "severity": "warning",
+                "suggested_fix": "",
+            },
+        ]
+        formatted = LemmaBreakdown.format_critic_feedback(issues)
+        assert "unstated_hypothesis" in formatted
+        assert "lemma_1" in formatted
+        assert "Assumes x > 0" in formatted
+        assert "Add hypothesis x > 0" in formatted
+        assert "weak_child_lemma" in formatted
+        assert "lemma_2" in formatted
+
+    def test_format_empty_issues(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        assert LemmaBreakdown.format_critic_feedback([]) == ""
+
+    def test_critic_feedback_appended_to_prompt(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        response = '{"lemmas": [{"node_id": "lemma_1", "statement_nl": "revised step", "depends_on": [], "from_prior_work": false}], "topological_order": ["lemma_1"]}'
+        llm = _make_mock_llm([response])
+
+        agent = LemmaBreakdown(llm_client=llm)
+        ctx = AgentContext(
+            task="prove P(n)",
+            metadata={
+                "statement_lean": "theorem p_n := sorry",
+                "critic_issues": [
+                    {
+                        "issue_type": "unstated_hypothesis",
+                        "node_id": "lemma_1",
+                        "description": "Missing boundedness",
+                        "severity": "blocking",
+                        "suggested_fix": "Add bounded hypothesis",
+                    },
+                ],
+            },
+        )
+        result = agent.run(ctx)
+
+        assert result.status == AgentStatus.SUCCESS
+        call_args = llm.complete.call_args
+        user_message = call_args[1]["messages"][0]["content"] if "messages" in call_args[1] else call_args[0][1][0]["content"]
+        assert "Previous Issues Identified by Proof Critic" in user_message
+        assert "Missing boundedness" in user_message
+
+    def test_no_feedback_when_no_issues(self):
+        from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+
+        response = '{"lemmas": [{"node_id": "lemma_1", "statement_nl": "step", "depends_on": [], "from_prior_work": false}], "topological_order": ["lemma_1"]}'
+        llm = _make_mock_llm([response])
+
+        agent = LemmaBreakdown(llm_client=llm)
+        ctx = AgentContext(
+            task="prove P(n)",
+            metadata={"statement_lean": "theorem p_n := sorry"},
+        )
+        result = agent.run(ctx)
+
+        assert result.status == AgentStatus.SUCCESS
+        call_args = llm.complete.call_args
+        user_message = call_args[1]["messages"][0]["content"] if "messages" in call_args[1] else call_args[0][1][0]["content"]
+        assert "Previous Issues" not in user_message
+
+
+class TestProofCriticRetryFeedback:
+    def _make_pipeline(self, mock_llm):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+        return ProofPipeline(
+            llm_client=mock_llm,
+            lean_repl=repl,
+            lean_search=search,
+            use_proof_critic=True,
+            max_critic_retries=2,
+        )
+
+    def test_proof_critic_feedback_passed_to_retry(self):
+        from unittest.mock import patch
+
+        issues = [
+            CritiqueIssue(
+                issue_type=CritiqueIssueType.UNSTATED_HYPOTHESIS,
+                node_id="lemma_1",
+                description="Missing measurability",
+                severity="blocking",
+                suggested_fix="Add Measurable f hypothesis",
+            ),
+            CritiqueIssue(
+                issue_type=CritiqueIssueType.WEAK_CHILD_LEMMA,
+                node_id="lemma_2",
+                description="Too weak to imply parent",
+                severity="blocking",
+                suggested_fix="Strengthen conclusion",
+            ),
+        ]
+
+        failing_critique = CritiqueResult(issues=issues, passed=False)
+        passing_critique = CritiqueResult(issues=[], passed=True)
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main theorem",
+                    statement_lean="theorem main := sorry",
+                    children=["lemma_1"],
+                ),
+                "lemma_1": ProofNode(
+                    node_id="lemma_1",
+                    statement_nl="sub-lemma",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["lemma_1", "root"],
+        )
+
+        llm = _make_mock_llm([])
+        pipeline = self._make_pipeline(llm)
+
+        breakdown_calls = []
+
+        def tracking_run_lemma(*args, **kwargs):
+            breakdown_calls.append(kwargs.get("critic_feedback"))
+            return tree
+
+        critic_call_count = [0]
+
+        def mock_run_critic(*args, **kwargs):
+            critic_call_count[0] += 1
+            if critic_call_count[0] == 1:
+                return failing_critique
+            return passing_critique
+
+        with (
+            patch.object(pipeline, "_run_lemma_breakdown", side_effect=tracking_run_lemma),
+            patch.object(pipeline, "_run_proof_critic", side_effect=mock_run_critic),
+            patch.object(pipeline, "_run_proof_search") as mock_search,
+            patch.object(pipeline, "_run_lemma_leanifier", return_value=tree),
+            patch.object(pipeline, "_run_recursive_prover") as mock_recursive,
+            patch.object(pipeline, "_run_flatten_finalize", return_value="proof code"),
+        ):
+            mock_search.return_value = ProofSearchResult(
+                statement="theorem main := sorry",
+                needs_decomposition=True,
+            )
+            mock_recursive.return_value = RecursiveProofResult(
+                root_statement="theorem main := sorry",
+                proved=True,
+                total_nodes=1,
+                proved_nodes=1,
+                lemma_tree=tree,
+            )
+
+            pipeline.run("theorem main := sorry", "main theorem")
+
+        assert len(breakdown_calls) >= 2
+        assert breakdown_calls[0] is None
+        assert breakdown_calls[1] is not None
+        assert len(breakdown_calls[1]) == 2
+        assert breakdown_calls[1][0].issue_type == CritiqueIssueType.UNSTATED_HYPOTHESIS

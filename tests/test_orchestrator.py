@@ -800,6 +800,166 @@ class TestOrchestratorFailurePaths:
         assert result.final_stage == PipelineStage.FAILED
 
 
+class TestOrchestratorRefinementLimit:
+    """Test: refinement loop respects OrchestratorConfig.max_refinements."""
+
+    def test_refinement_stops_at_config_limit(self):
+        from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+        llm = _make_mock_llm()
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+        config = OrchestratorConfig(max_conjectures=1, max_refinements=2)
+
+        orch = ResearchOrchestrator(
+            llm_client=llm, lean_repl=repl, lean_search=search, config=config
+        )
+
+        refine_calls = [0]
+
+        def mock_refining(raw_idea):
+            refine_calls[0] += 1
+            orch._state_machine.session_state.refinements_attempted += 1
+            if orch._state_machine.session_state.refinements_attempted > config.max_refinements:
+                orch._state_machine.transition(
+                    PipelineStage.FAILED,
+                    reason="Refinement limit reached",
+                )
+            else:
+                orch._state_machine.transition(
+                    PipelineStage.FORMALIZING,
+                    reason="Refined conjecture",
+                )
+
+        def mock_formalizing(raw_idea):
+            orch._state_machine.transition(
+                PipelineStage.REFINING,
+                reason="Formalization failed",
+            )
+
+        def mock_conjecturing(raw_idea):
+            orch._state_machine.session_state.conjectures_processed = 1
+            orch._active_conjecture = _conj("c1")
+            orch._active_lean_statement = ""
+            orch._memory.record_conjecture(_conj("c1"), ConjectureOutcome.PENDING)
+            orch._state_machine.transition(PipelineStage.FORMALIZING)
+
+        with (
+            patch.object(orch, "_handle_exploring", wraps=lambda r: _mock_exploring(orch, r)),
+            patch.object(orch, "_handle_conjecturing", wraps=mock_conjecturing),
+            patch.object(orch, "_handle_formalizing", wraps=mock_formalizing),
+            patch.object(orch, "_handle_refining", wraps=mock_refining),
+        ):
+            result = orch.run("test idea")
+
+        assert result.final_stage == PipelineStage.FAILED
+        assert refine_calls[0] == 3  # called at attempts 0, 1, 2; stops when attempt 2 > limit 2
+
+    def test_zero_refinements_skips_refining(self):
+        from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+        llm = _make_mock_llm()
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+        config = OrchestratorConfig(max_conjectures=1, max_refinements=0)
+
+        orch = ResearchOrchestrator(
+            llm_client=llm, lean_repl=repl, lean_search=search, config=config
+        )
+
+        refine_calls = [0]
+
+        def mock_refining(raw_idea):
+            refine_calls[0] += 1
+            orch._state_machine.session_state.refinements_attempted += 1
+            if orch._state_machine.session_state.refinements_attempted > config.max_refinements:
+                orch._state_machine.transition(
+                    PipelineStage.FAILED,
+                    reason="Refinement limit reached",
+                )
+            else:
+                orch._state_machine.transition(
+                    PipelineStage.FORMALIZING,
+                    reason="Refined conjecture",
+                )
+
+        def mock_formalizing(raw_idea):
+            orch._state_machine.transition(
+                PipelineStage.REFINING,
+                reason="Formalization failed",
+            )
+
+        def mock_conjecturing(raw_idea):
+            orch._state_machine.session_state.conjectures_processed = 1
+            orch._active_conjecture = _conj("c1")
+            orch._active_lean_statement = ""
+            orch._memory.record_conjecture(_conj("c1"), ConjectureOutcome.PENDING)
+            orch._state_machine.transition(PipelineStage.FORMALIZING)
+
+        with (
+            patch.object(orch, "_handle_exploring", wraps=lambda r: _mock_exploring(orch, r)),
+            patch.object(orch, "_handle_conjecturing", wraps=mock_conjecturing),
+            patch.object(orch, "_handle_formalizing", wraps=mock_formalizing),
+            patch.object(orch, "_handle_refining", wraps=mock_refining),
+        ):
+            result = orch.run("test idea")
+
+        assert result.final_stage == PipelineStage.FAILED
+        assert refine_calls[0] == 1  # enters refining once, immediately exceeds limit
+
+    def test_higher_max_refinements_allows_more_attempts(self):
+        from agentic_research.orchestrator.engine import ResearchOrchestrator
+
+        llm = _make_mock_llm()
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+        config = OrchestratorConfig(max_conjectures=1, max_refinements=5)
+
+        orch = ResearchOrchestrator(
+            llm_client=llm, lean_repl=repl, lean_search=search, config=config
+        )
+
+        refine_calls = [0]
+
+        def mock_refining(raw_idea):
+            refine_calls[0] += 1
+            orch._state_machine.session_state.refinements_attempted += 1
+            if orch._state_machine.session_state.refinements_attempted > config.max_refinements:
+                orch._state_machine.transition(
+                    PipelineStage.FAILED,
+                    reason="Refinement limit reached",
+                )
+            else:
+                orch._state_machine.transition(
+                    PipelineStage.FORMALIZING,
+                    reason="Refined conjecture",
+                )
+
+        def mock_formalizing(raw_idea):
+            orch._state_machine.transition(
+                PipelineStage.REFINING,
+                reason="Formalization failed",
+            )
+
+        def mock_conjecturing(raw_idea):
+            orch._state_machine.session_state.conjectures_processed = 1
+            orch._active_conjecture = _conj("c1")
+            orch._active_lean_statement = ""
+            orch._memory.record_conjecture(_conj("c1"), ConjectureOutcome.PENDING)
+            orch._state_machine.transition(PipelineStage.FORMALIZING)
+
+        with (
+            patch.object(orch, "_handle_exploring", wraps=lambda r: _mock_exploring(orch, r)),
+            patch.object(orch, "_handle_conjecturing", wraps=mock_conjecturing),
+            patch.object(orch, "_handle_formalizing", wraps=mock_formalizing),
+            patch.object(orch, "_handle_refining", wraps=mock_refining),
+        ):
+            result = orch.run("test idea")
+
+        assert result.final_stage == PipelineStage.FAILED
+        assert refine_calls[0] == 6  # attempts 0..5, stops when 5 > 5
+
+
 class TestOrchestratorCostTracking:
     def test_tokens_accumulated(self):
         from agentic_research.orchestrator.engine import ResearchOrchestrator

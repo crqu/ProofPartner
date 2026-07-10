@@ -7,6 +7,7 @@ real-time cost with rich.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -101,6 +102,15 @@ def _record_agent_tokens(cost_tracker, agent) -> None:
         cache_read_tokens=tokens.cache_read_input_tokens,
         cache_write_tokens=tokens.cache_creation_input_tokens,
     )
+
+
+def _warn_if_lean_missing() -> None:
+    if shutil.which("lean") is None:
+        click.echo(
+            "Warning: Lean 4 not found on PATH. "
+            "Proof checking will fall back to mock mode. "
+            "Install Lean 4 via https://leanprover.github.io/lean4/doc/setup.html"
+        )
 
 
 def _print_cost_summary(cost_tracker: CostTracker, budget: float) -> None:
@@ -276,6 +286,8 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
     conjecture, produces a Lean 4 statement with type-first formalization,
     and runs intent verification.
     """
+    _warn_if_lean_missing()
+
     from agentic_research.agents.informalizer import Informalizer
     from agentic_research.agents.intent_judge import IntentJudge
 
@@ -406,6 +418,8 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
     Shows real-time progress with cost. Hard-stops when budget exceeded
     or timeout reached.
     """
+    _warn_if_lean_missing()
+
     import os
 
     use_external = backend == "leanstral"
@@ -508,6 +522,8 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
     into Lean 4, checks for counterexamples, attempts proofs, and refines
     on failure. Creates checkpoints at each stage for resumability.
     """
+    _warn_if_lean_missing()
+
     from agentic_research.models.session import (
         OrchestratorConfig,
         PipelineStage,

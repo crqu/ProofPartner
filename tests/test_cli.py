@@ -507,6 +507,36 @@ class TestResumeCommand:
         assert "RESEARCH COMPLETE" in result.output
 
 
+class TestLeanNotFoundWarning:
+    def test_formalize_warns_when_lean_missing(self, runner, tmp_session_dir):
+        with patch("agentic_research.cli.main.shutil.which", return_value=None):
+            result = runner.invoke(cli, ["formalize", "test conjecture"])
+        assert "Warning: Lean 4 not found" in result.output
+
+    def test_prove_warns_when_lean_missing(self, runner, tmp_session_dir):
+        with patch("agentic_research.cli.main.shutil.which", return_value=None):
+            result = runner.invoke(cli, ["prove", "theorem test : True := trivial"], input="n\n")
+        assert "Warning: Lean 4 not found" in result.output
+
+    def test_research_warns_when_lean_missing(self, runner, tmp_session_dir):
+        with patch("agentic_research.cli.main.shutil.which", return_value=None):
+            result = runner.invoke(cli, ["research", "test idea"], input="n\n")
+        assert "Warning: Lean 4 not found" in result.output
+
+    def test_explore_does_not_warn_about_lean(self, runner, tmp_session_dir):
+        with (
+            patch("agentic_research.cli.main.shutil.which", return_value=None),
+            patch("agentic_research.cli.main._create_llm_client", side_effect=Exception("stop early")),
+        ):
+            result = runner.invoke(cli, ["explore", "test idea"])
+        assert "Warning: Lean 4 not found" not in result.output
+
+    def test_no_warning_when_lean_present(self, runner, tmp_session_dir):
+        with patch("agentic_research.cli.main.shutil.which", return_value="/usr/bin/lean"):
+            result = runner.invoke(cli, ["formalize", "test conjecture"])
+        assert "Warning: Lean 4 not found" not in result.output
+
+
 class TestInputValidation:
     def test_research_rejects_zero_budget(self, runner):
         result = runner.invoke(cli, ["research", "test idea", "--budget", "0"])

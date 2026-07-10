@@ -222,13 +222,23 @@ class RecursiveProver(BaseAgent):
         node.status = NodeStatus.FAILED
         return False
 
+    @staticmethod
+    def _format_child_declaration(child: ProofNode) -> str:
+        """Format a child node as an axiom declaration with usage hint."""
+        stmt = child.statement_lean
+        if child.from_prior_work and not stmt.strip().startswith("axiom "):
+            name = child.node_id.replace("-", "_")
+            stmt = f"axiom {name} : {stmt}"
+        return f"{stmt}\n-- Use: have <result> := {child.node_id.replace('-', '_')} <args>"
+
     def _prove_parent_with_children(
         self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage
     ) -> bool:
         """Prove the parent assuming child lemmas are true (sorry)."""
         children = tree.get_children(node.node_id)
         child_decls = "\n\n".join(
-            c.statement_lean for c in children if c.statement_lean
+            self._format_child_declaration(c)
+            for c in children if c.statement_lean
         )
 
         if not child_decls:

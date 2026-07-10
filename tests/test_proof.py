@@ -692,6 +692,47 @@ class TestRecursiveProver:
         assert result.status == AgentStatus.FAILURE
 
 
+class TestFormatChildDeclaration:
+    def test_axiom_node_gets_axiom_prefix(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_1",
+            statement_nl="Kantorovich duality",
+            statement_lean="∀ (μ ν : Measure Ω), kantorovich μ ν",
+            from_prior_work=True,
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert result.startswith("axiom lemma_1 :")
+        assert "-- Use: have <result> := lemma_1 <args>" in result
+
+    def test_non_axiom_node_preserves_statement(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_2",
+            statement_nl="some step",
+            statement_lean="theorem lemma_2 : True := sorry",
+            from_prior_work=False,
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert result.startswith("theorem lemma_2")
+        assert "-- Use: have <result> := lemma_2 <args>" in result
+
+    def test_axiom_node_already_prefixed(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_3",
+            statement_nl="compactness",
+            statement_lean="axiom prokhorov_compact : ∀ K, IsCompact K",
+            from_prior_work=True,
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert result.startswith("axiom prokhorov_compact")
+        assert "axiom lemma_3" not in result
+
+
 # ---------------------------------------------------------------------------
 # agents/flatten_finalize.py
 # ---------------------------------------------------------------------------
@@ -1054,6 +1095,14 @@ class TestPhase7PromptTemplates:
         )
         assert "theorem p" in rendered
         assert "theorem l1" in rendered
+
+    def test_parent_proof_system_has_have_examples(self):
+        from agentic_research.agents.prompt_templates import PARENT_PROOF_SYSTEM
+
+        assert "have" in PARENT_PROOF_SYSTEM
+        assert "axiom foo" in PARENT_PROOF_SYSTEM
+        assert "axiom bar" in PARENT_PROOF_SYSTEM
+        assert "BY NAME" in PARENT_PROOF_SYSTEM
 
     def test_flatten_template(self):
         from agentic_research.agents.prompt_templates import FLATTEN_PROOF_TEMPLATE

@@ -152,7 +152,9 @@ class LLMClient:
             extended_thinking=use_extended_thinking,
         )
 
+        call_start = time.monotonic()
         response = self._call_with_retries(kwargs)
+        call_latency = round(time.monotonic() - call_start, 3)
 
         content_text = ""
         thinking_text = None
@@ -176,6 +178,7 @@ class LLMClient:
             stop_reason=response.stop_reason,
             input_tokens=token_usage.input_tokens,
             output_tokens=token_usage.output_tokens,
+            latency_seconds=call_latency,
         )
 
         return LLMResponse(

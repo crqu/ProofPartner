@@ -98,6 +98,7 @@ class ProofSearchAgent(BaseAgent):
                     token_usage=total_tokens,
                 )
 
+        log.warning("proof_search_exhausted", strategies_tried=len(strategies))
         search_result = ProofSearchResult(
             statement=statement,
             proved=False,

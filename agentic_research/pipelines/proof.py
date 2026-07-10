@@ -88,6 +88,7 @@ class ProofPipeline:
 
     def run(self, lean_statement: str, statement_nl: str = "") -> ProofPipelineResult:
         """Execute the full proof pipeline."""
+        pipeline_start = time.monotonic()
         log.info("proof_pipeline_start", statement_len=len(lean_statement))
 
         if self._use_external_prover and self._external_prover_config is not None:
@@ -129,7 +130,7 @@ class ProofPipeline:
                         total_token_usage=self._total_tokens,
                     )
 
-            log.info("proof_pipeline_direct_success")
+            log.info("proof_pipeline_direct_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
             return ProofPipelineResult(
                 statement=lean_statement,
                 proved=True,
@@ -160,7 +161,7 @@ class ProofPipeline:
                             total_token_usage=self._total_tokens,
                         )
                     else:
-                        log.info("proof_pipeline_corrected_success")
+                        log.info("proof_pipeline_corrected_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
                         return ProofPipelineResult(
                             statement=lean_statement,
                             proved=True,
@@ -170,7 +171,7 @@ class ProofPipeline:
                             total_token_usage=self._total_tokens,
                         )
                 else:
-                    log.info("proof_pipeline_corrected_success")
+                    log.info("proof_pipeline_corrected_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
                     return ProofPipelineResult(
                         statement=lean_statement,
                         proved=True,
@@ -285,7 +286,7 @@ class ProofPipeline:
                     total_token_usage=self._total_tokens,
                 )
 
-        log.info("proof_pipeline_recursive_success")
+        log.info("proof_pipeline_recursive_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
         return ProofPipelineResult(
             statement=lean_statement,
             proved=True,

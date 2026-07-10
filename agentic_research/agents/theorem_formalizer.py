@@ -127,10 +127,11 @@ class TheoremFormalizer(BaseAgent):
                 else "Unknown compilation error"
             )
 
-            log.info(
+            log.warning(
                 "theorem_formalizer_retry",
                 iteration=iteration,
                 error_count=len(compilation.errors),
+                first_error=compilation.errors[0] if compilation.errors else None,
             )
 
         failure = (

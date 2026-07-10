@@ -76,6 +76,7 @@ class TestHelp:
         assert "prove" in result.output
         assert "status" in result.output
         assert "eval" in result.output
+        assert "resume" in result.output
 
     def test_version(self, runner):
         result = runner.invoke(cli, ["--version"])
@@ -417,6 +418,141 @@ class TestStatusCommand:
         result = runner.invoke(cli, ["status"])
         assert result.exit_code == 0
         assert "test-session-123" in result.output
+
+
+class TestResumeCommand:
+    def test_resume_list_no_sessions(self, runner, tmp_path, monkeypatch):
+        monkeypatch.setattr("agentic_research.orchestrator.rollback.DEFAULT_CHECKPOINT_DIR", tmp_path / "empty")
+        result = runner.invoke(cli, ["resume", "--list"])
+        assert result.exit_code == 0
+        assert "No sessions found" in result.output
+
+    def test_resume_list_with_sessions(self, runner, tmp_path, monkeypatch):
+        ckpt_dir = tmp_path / "checkpoints"
+        monkeypatch.setattr("agentic_research.orchestrator.rollback.DEFAULT_CHECKPOINT_DIR", ckpt_dir)
+
+        from agentic_research.models.session import (
+            PipelineStage,
+            SessionCheckpoint,
+            SessionMemoryData,
+            SessionState,
+        )
+
+        session_dir = ckpt_dir / "test-session-abc"
+        session_dir.mkdir(parents=True)
+
+        checkpoint = SessionCheckpoint(
+            checkpoint_id="ckpt_1",
+            stage=PipelineStage.PROVING,
+            session_state=SessionState(raw_idea="test idea", stage=PipelineStage.PROVING),
+            memory=SessionMemoryData(),
+        )
+        (session_dir / "ckpt_1.json").write_text(checkpoint.model_dump_json(indent=2))
+
+        result = runner.invoke(cli, ["resume", "--list"])
+        assert result.exit_code == 0
+        assert "test-session-abc" in result.output
+        assert "proving" in result.output
+
+    def test_resume_no_session_id(self, runner):
+        result = runner.invoke(cli, ["resume"])
+        assert result.exit_code != 0
+        assert "session ID" in result.output or "Error" in result.output
+
+    def test_resume_invalid_session(self, runner, tmp_path, monkeypatch):
+        monkeypatch.setattr("agentic_research.orchestrator.rollback.DEFAULT_CHECKPOINT_DIR", tmp_path / "empty_ckpts")
+        result = runner.invoke(cli, ["resume", "nonexistent-session"])
+        assert result.exit_code != 0
+        assert "No checkpoints found" in result.output
+
+    def test_resume_valid_session(self, runner, tmp_path, monkeypatch):
+        ckpt_dir = tmp_path / "checkpoints"
+        monkeypatch.setattr("agentic_research.orchestrator.rollback.DEFAULT_CHECKPOINT_DIR", ckpt_dir)
+
+        from agentic_research.models.session import (
+            PipelineStage,
+            ResearchSessionResult,
+            SessionCheckpoint,
+            SessionMemoryData,
+            SessionState,
+        )
+
+        session_dir = ckpt_dir / "resume-session-1"
+        session_dir.mkdir(parents=True)
+        checkpoint = SessionCheckpoint(
+            checkpoint_id="ckpt_1",
+            stage=PipelineStage.PROVING,
+            session_state=SessionState(raw_idea="test idea", stage=PipelineStage.PROVING),
+            memory=SessionMemoryData(),
+        )
+        (session_dir / "ckpt_1.json").write_text(checkpoint.model_dump_json(indent=2))
+
+        mock_result = ResearchSessionResult(
+            session_id="resume-session-1",
+            raw_idea="test idea",
+            final_stage=PipelineStage.COMPLETE,
+        )
+
+        with (
+            patch("agentic_research.cli.main._create_llm_client") as mock_llm,
+            patch("agentic_research.cli.main._create_lean_repl"),
+            patch("agentic_research.cli.main._create_lean_search"),
+            patch("agentic_research.orchestrator.engine.ResearchOrchestrator.resume_from_checkpoint", return_value=mock_result),
+        ):
+            mock_llm.return_value = MagicMock()
+            result = runner.invoke(cli, ["resume", "resume-session-1"])
+
+        assert result.exit_code == 0
+        assert "Resuming session" in result.output
+        assert "RESEARCH COMPLETE" in result.output
+
+
+class TestInputValidation:
+    def test_research_rejects_zero_budget(self, runner):
+        result = runner.invoke(cli, ["research", "test idea", "--budget", "0"])
+        assert result.exit_code != 0
+        assert "greater than 0" in result.output or "Invalid" in result.output or "Error" in result.output
+
+    def test_research_rejects_negative_budget(self, runner):
+        result = runner.invoke(cli, ["research", "test idea", "--budget", "-5"])
+        assert result.exit_code != 0
+
+    def test_research_rejects_zero_max_conjectures(self, runner):
+        result = runner.invoke(cli, ["research", "test idea", "--max-conjectures", "0"])
+        assert result.exit_code != 0
+        assert "greater than 0" in result.output or "Invalid" in result.output or "Error" in result.output
+
+    def test_research_rejects_negative_max_conjectures(self, runner):
+        result = runner.invoke(cli, ["research", "test idea", "--max-conjectures", "-1"])
+        assert result.exit_code != 0
+
+    def test_research_rejects_negative_max_refinements(self, runner):
+        result = runner.invoke(cli, ["research", "test idea", "--max-refinements", "-1"])
+        assert result.exit_code != 0
+        assert "non-negative" in result.output or "Invalid" in result.output or "Error" in result.output
+
+    def test_research_accepts_zero_max_refinements(self, runner, tmp_session_dir):
+        """max-refinements = 0 is valid (no refinements)."""
+        from agentic_research.models.session import PipelineStage, ResearchSessionResult
+
+        mock_result = ResearchSessionResult(
+            session_id="test",
+            raw_idea="test idea",
+            final_stage=PipelineStage.COMPLETE,
+        )
+
+        with (
+            patch("agentic_research.cli.main._create_llm_client") as mock_llm,
+            patch("agentic_research.cli.main._create_lean_repl"),
+            patch("agentic_research.cli.main._create_lean_search"),
+            patch("agentic_research.orchestrator.engine.ResearchOrchestrator.run", return_value=mock_result),
+        ):
+            mock_llm.return_value = MagicMock()
+            result = runner.invoke(
+                cli, ["research", "test idea", "--max-refinements", "0"], input="y\n"
+            )
+
+        assert result.exit_code == 0
 
 
 class TestBudgetEnforcement:

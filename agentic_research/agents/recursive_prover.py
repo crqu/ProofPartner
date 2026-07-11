@@ -226,12 +226,22 @@ class RecursiveProver(BaseAgent):
 
     @staticmethod
     def _format_child_declaration(child: ProofNode) -> str:
-        """Format a child node as an axiom declaration with usage hint."""
-        stmt = child.statement_lean
-        if child.from_prior_work and not stmt.strip().startswith("axiom "):
-            name = child.node_id.replace("-", "_")
+        """Format a child node as an axiom declaration with usage hint.
+
+        All children are declared as axioms (not theorems with sorry) so the
+        parent proof compiles without sorry warnings.
+        """
+        stmt = child.statement_lean.strip()
+        name = child.node_id.replace("-", "_")
+        if stmt.startswith("axiom "):
+            pass
+        elif stmt.startswith("theorem ") or stmt.startswith("lemma "):
+            sig = re.sub(r"^(?:theorem|lemma)\s+\S+", "", stmt)
+            sig = re.sub(r"\s*:=\s*(?:by\s+)?sorry\s*$", "", sig)
+            stmt = f"axiom {name}{sig}"
+        else:
             stmt = f"axiom {name} : {stmt}"
-        return f"{stmt}\n-- Use: have <result> := {child.node_id.replace('-', '_')} <args>"
+        return f"{stmt}\n-- Use: have <result> := {name} <args>"
 
     def _prove_parent_with_children(
         self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage

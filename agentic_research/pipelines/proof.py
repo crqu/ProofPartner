@@ -38,6 +38,7 @@ from agentic_research.models.formalization import (
 )
 from agentic_research.models.proof import (
     CritiqueIssue,
+    CritiqueIssueType,
     CritiqueResult,
     ErrorCategory,
     FailureDiagnosis,
@@ -289,6 +290,15 @@ class ProofPipeline:
         recursive_result = self._run_recursive_prover(tree)
 
         if not recursive_result.proved or not recursive_result.lemma_tree:
+            weak_feedback = self._extract_weak_child_feedback(recursive_result)
+            if weak_feedback:
+                retried = self._retry_on_weak_children(
+                    lean_statement, statement_nl, search_result,
+                    weak_feedback, pipeline_start,
+                )
+                if retried is not None:
+                    return retried
+
             return ProofPipelineResult(
                 statement=lean_statement,
                 search_result=search_result,
@@ -541,6 +551,113 @@ class ProofPipeline:
             root_statement=tree.nodes[tree.root_id].statement_lean,
             failure_reason="Recursive prover returned no result",
         )
+
+    _MAX_WEAK_CHILD_RETRIES = 2
+
+    @staticmethod
+    def _extract_weak_child_feedback(
+        recursive_result: RecursiveProofResult,
+    ) -> list[CritiqueIssue]:
+        """Extract WEAK_CHILD_LEMMA diagnoses from a failed recursive proof."""
+        if not recursive_result.lemma_tree:
+            return []
+        issues: list[CritiqueIssue] = []
+        for node in recursive_result.lemma_tree.nodes.values():
+            if (
+                node.failure_diagnosis
+                and node.failure_diagnosis.failure_type == FailureType.WEAK_CHILD_LEMMA
+            ):
+                issues.append(
+                    CritiqueIssue(
+                        issue_type=CritiqueIssueType.WEAK_CHILD_LEMMA,
+                        node_id=node.failure_diagnosis.problematic_child_id or node.node_id,
+                        description=node.failure_diagnosis.description,
+                        severity="blocking",
+                        suggested_fix=node.failure_diagnosis.suggested_fix,
+                    )
+                )
+        return issues
+
+    def _retry_on_weak_children(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+        search_result: ProofSearchResult,
+        weak_feedback: list[CritiqueIssue],
+        pipeline_start: float,
+    ) -> ProofPipelineResult | None:
+        """Retry lemma breakdown when WEAK_CHILD_LEMMA is detected."""
+        for attempt in range(self._MAX_WEAK_CHILD_RETRIES):
+            log.info(
+                "proof_pipeline_weak_child_retry",
+                attempt=attempt + 1,
+                weak_children=len(weak_feedback),
+            )
+            self._notify_progress(
+                "Lemma Breakdown",
+                f"Retrying decomposition (weak child feedback, attempt {attempt + 1})",
+            )
+
+            tree = self._run_lemma_breakdown(
+                lean_statement, statement_nl, search_result,
+                critic_feedback=weak_feedback,
+            )
+            if tree is None:
+                return None
+
+            if self._use_proof_detailer:
+                tree = self._run_proof_detailer(tree)
+
+            self._notify_progress("Leanification", "Re-converting lemmas to Lean 4")
+            tree = self._run_lemma_leanifier(tree)
+            if tree is None:
+                return None
+
+            has_axiom_nodes = any(n.from_prior_work for n in tree.nodes.values())
+            if has_axiom_nodes:
+                self._verify_axiom_nodes(tree, statement_nl)
+
+            self._notify_progress("Recursive Prover", "Re-proving with revised decomposition")
+            recursive_result = self._run_recursive_prover(tree)
+
+            if recursive_result.proved and recursive_result.lemma_tree:
+                self._notify_progress("Finalization", "Assembling final proof")
+                final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
+                if final_proof:
+                    if self._use_claim_check:
+                        passed = self._run_claim_check(lean_statement, final_proof)
+                        if not passed:
+                            return ProofPipelineResult(
+                                statement=lean_statement,
+                                search_result=search_result,
+                                recursive_result=recursive_result,
+                                claim_check_passed=False,
+                                failure_stage="claim_check",
+                                failure_reason="Claim check failed after weak-child retry",
+                                total_token_usage=self._total_tokens,
+                            )
+
+                    log.info(
+                        "proof_pipeline_weak_child_retry_success",
+                        attempt=attempt + 1,
+                        elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
+                    )
+                    return ProofPipelineResult(
+                        statement=lean_statement,
+                        proved=True,
+                        final_proof=final_proof,
+                        search_result=search_result,
+                        recursive_result=recursive_result,
+                        claim_check_passed=True,
+                        total_token_usage=self._total_tokens,
+                    )
+
+            new_feedback = self._extract_weak_child_feedback(recursive_result)
+            if not new_feedback:
+                break
+            weak_feedback = new_feedback
+
+        return None
 
     def _run_flatten_finalize(self, tree: LemmaTree) -> str | None:
         agent = FlattenFinalize(llm_client=self._llm, lean_repl=self._repl)

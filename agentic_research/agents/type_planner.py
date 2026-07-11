@@ -81,7 +81,7 @@ class TypePlanner(BaseAgent):
             use_cache=True,
         )
 
-        plan = self._parse_response(response.content, conjecture)
+        plan = self._parse_response(response.content, conjecture, user_content)
 
         plan = self._apply_mathlib_grounding(plan, mathlib_grounded)
 
@@ -157,11 +157,42 @@ class TypePlanner(BaseAgent):
             lines.append(line)
         return "\n".join(lines)
 
-    def _parse_response(self, content: str, conjecture: str) -> TypePlan:
+    def _parse_response(
+        self, content: str, conjecture: str, original_user_content: str | None = None,
+    ) -> TypePlan:
         parsed = self._llm.extract_json(content)
         if not isinstance(parsed, dict):
-            log.warning("type_planner_parse_fallback", reason="no valid JSON")
-            return TypePlan(conjecture_statement=conjecture)
+            log.warning(
+                "type_planner_parse_fallback",
+                reason="no valid JSON",
+                raw_response_prefix=content[:500],
+            )
+            if original_user_content is not None:
+                retry_response = self._llm.complete(
+                    system=TYPE_PLANNER_SYSTEM,
+                    messages=[
+                        {"role": "user", "content": original_user_content},
+                        {"role": "assistant", "content": content},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous response was not valid JSON. "
+                                "Respond ONLY with a JSON object matching the TypePlan schema. "
+                                "No explanation, no markdown, just JSON."
+                            ),
+                        },
+                    ],
+                    temperature=0.1,
+                    use_cache=False,
+                )
+                self._accumulate_tokens(retry_response.token_usage)
+                parsed = self._llm.extract_json(retry_response.content)
+                if not isinstance(parsed, dict):
+                    log.warning("type_planner_retry_failed", reason="still no valid JSON")
+                    return TypePlan(conjecture_statement=conjecture)
+                log.info("type_planner_retry_succeeded")
+            else:
+                return TypePlan(conjecture_statement=conjecture)
 
         candidates = []
         for c in parsed.get("candidates", []):

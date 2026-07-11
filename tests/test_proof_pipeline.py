@@ -788,6 +788,11 @@ class TestTypeFirstFormalization:
         assert pipeline._use_proof_critic is True
         assert pipeline._use_proof_detailer is True
 
+    def test_default_max_critic_retries_is_zero(self):
+        """Default max_critic_retries is 0 — critic runs once but doesn't gate."""
+        pipeline = _make_pipeline()
+        assert pipeline._max_critic_retries == 0
+
     def test_type_first_failure_falls_back(self):
         """If type formalization fails, pipeline proceeds without type context."""
         from unittest.mock import patch

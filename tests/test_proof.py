@@ -382,6 +382,88 @@ class TestProofSearchAgent:
         search_result = ProofSearchResult.model_validate(result.result)
         assert search_result.proved
 
+    def test_lean_preamble_passed_to_iterative_prover(self):
+        from unittest.mock import patch
+        from agentic_research.agents.proof_search import ProofSearchAgent
+        from agentic_research.agents.prover import IterativeProver
+
+        strategies_json = '{"strategies": [{"strategy_type": "direct", "description": "use simp", "plausibility": 0.9, "relevant_lemmas": [], "key_tactics": ["simp"]}]}'
+        llm = _make_mock_llm([
+            strategies_json,
+            "```lean\ntheorem foo : True := trivial\n```",
+        ])
+
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+
+        preamble = "import Mathlib\ndef Coupling := sorry"
+        agent = ProofSearchAgent(
+            llm_client=llm,
+            lean_repl=repl,
+            lean_search=search,
+            prover_config=ProverConfig(max_iterations=1),
+            lean_preamble=preamble,
+        )
+
+        captured_preamble = []
+        original_init = IterativeProver.__init__
+
+        def spy_init(self_prover, *args, **kwargs):
+            captured_preamble.append(kwargs.get("lean_preamble"))
+            original_init(self_prover, *args, **kwargs)
+
+        with patch.object(IterativeProver, "__init__", spy_init):
+            ctx = AgentContext(task="theorem foo : True")
+            agent.run(ctx)
+
+        assert len(captured_preamble) >= 1
+        assert captured_preamble[0] == preamble
+
+
+class TestIterativeProverPreamble:
+    def test_preamble_included_in_first_attempt(self):
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        llm = _make_mock_llm(["```lean\ntheorem foo : True := trivial\n```"])
+
+        preamble = "import Mathlib\ndef WassersteinDist := sorry"
+        prover = IterativeProver(
+            llm_client=llm,
+            lean_repl=repl,
+            config=ProverConfig(max_iterations=1),
+            lean_preamble=preamble,
+        )
+
+        ctx = AgentContext(task="theorem foo : True")
+        prover.run(ctx)
+
+        call_args = llm.complete.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "WassersteinDist" in user_content
+        assert user_content.index("WassersteinDist") < user_content.index("theorem foo")
+
+    def test_no_preamble_no_prefix(self):
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        llm = _make_mock_llm(["```lean\ntheorem foo : True := trivial\n```"])
+
+        prover = IterativeProver(
+            llm_client=llm,
+            lean_repl=repl,
+            config=ProverConfig(max_iterations=1),
+        )
+
+        ctx = AgentContext(task="theorem foo : True")
+        prover.run(ctx)
+
+        call_args = llm.complete.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "WassersteinDist" not in user_content
+
 
 # ---------------------------------------------------------------------------
 # agents/lemma_breakdown.py

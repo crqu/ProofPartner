@@ -74,7 +74,7 @@ class ProofPipeline:
         use_external_prover: bool = False,
         external_prover_config: ExternalProverConfig | None = None,
         use_proof_critic: bool = True,
-        max_critic_retries: int = 2,
+        max_critic_retries: int = 0,
         use_proof_detailer: bool = True,
         use_intent_judge: bool = False,
         progress_callback: Callable[[str, str], None] | None = None,
@@ -153,6 +153,14 @@ class ProofPipeline:
                 proved=True,
                 final_proof=proof_code,
                 total_token_usage=self._total_tokens,
+            )
+
+        type_defs = self._run_type_first_formalization(self._statement_nl)
+        if type_defs:
+            self._lean_preamble = (
+                f"{self._lean_preamble}\n\n{type_defs}"
+                if self._lean_preamble
+                else type_defs
             )
 
         search_result = self._run_proof_search(lean_statement)
@@ -265,14 +273,6 @@ class ProofPipeline:
         if self._use_proof_detailer:
             tree = self._run_proof_detailer(tree)
 
-        type_defs = self._run_type_first_formalization(self._statement_nl)
-        if type_defs:
-            self._lean_preamble = (
-                f"{self._lean_preamble}\n\n{type_defs}"
-                if self._lean_preamble
-                else type_defs
-            )
-
         self._notify_progress("Leanification", "Converting lemmas to Lean 4")
         tree = self._run_lemma_leanifier(tree)
         if tree is None:
@@ -383,6 +383,7 @@ class ProofPipeline:
             lean_search=self._search,
             prover_config=self._prover_config,
             max_strategies=self._max_strategies,
+            lean_preamble=self._lean_preamble,
         )
         ctx = AgentContext(task=statement)
         result = agent.run(ctx)
@@ -775,6 +776,7 @@ class ProofPipeline:
             lean_search=self._search,
             prover_config=self._prover_config,
             max_strategies=self._max_strategies,
+            lean_preamble=self._lean_preamble,
         )
         ctx = AgentContext(task=augmented_task)
         result = agent.run(ctx)

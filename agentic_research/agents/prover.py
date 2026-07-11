@@ -50,11 +50,13 @@ class IterativeProver(BaseAgent):
         llm_client: LLMClient,
         lean_repl: LeanRepl,
         config: ProverConfig | None = None,
+        lean_preamble: str | None = None,
     ) -> None:
         self._config = config or ProverConfig()
         super().__init__(name="iterative_prover", max_retries=1)
         self._llm = llm_client
         self._repl = lean_repl
+        self._lean_preamble = lean_preamble
 
     @property
     def config(self) -> ProverConfig:
@@ -164,12 +166,17 @@ class IterativeProver(BaseAgent):
         errors: str,
         goals: str,
     ) -> "LLMResponse":
+        full_statement = (
+            f"{self._lean_preamble}\n\n{statement}"
+            if self._lean_preamble
+            else statement
+        )
 
         if previous_attempt is None:
-            user_content = PROOF_ATTEMPT_TEMPLATE.format(statement=statement)
+            user_content = PROOF_ATTEMPT_TEMPLATE.format(statement=full_statement)
         else:
             user_content = ERROR_FEEDBACK_TEMPLATE.format(
-                statement=statement,
+                statement=full_statement,
                 previous_attempt=previous_attempt,
                 errors=errors,
                 goals=goals,

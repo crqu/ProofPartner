@@ -53,6 +53,7 @@ class ProofSearchAgent(BaseAgent):
         *,
         prover_config: ProverConfig | None = None,
         max_strategies: int = 3,
+        lean_preamble: str | None = None,
     ) -> None:
         super().__init__(name="proof_search", max_retries=1)
         self._llm = llm_client
@@ -60,6 +61,7 @@ class ProofSearchAgent(BaseAgent):
         self._search = lean_search
         self._prover_config = prover_config or ProverConfig()
         self._max_strategies = max_strategies
+        self._lean_preamble = lean_preamble
 
     def _execute(self, context: AgentContext) -> AgentResult:
         statement = context.task
@@ -181,6 +183,7 @@ class ProofSearchAgent(BaseAgent):
             llm_client=self._llm,
             lean_repl=self._repl,
             config=self._prover_config,
+            lean_preamble=self._lean_preamble,
         )
 
         ctx = AgentContext(

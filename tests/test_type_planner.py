@@ -306,3 +306,103 @@ class TestSyntaxGuard:
     def test_notation_alternatives_mentioned(self):
         assert "⨆" in THEOREM_FORMALIZER_SYSTEM or "iSup" in THEOREM_FORMALIZER_SYSTEM
         assert "⨅" in THEOREM_FORMALIZER_SYSTEM or "iInf" in THEOREM_FORMALIZER_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# TypePlanner JSON parse retry
+# ---------------------------------------------------------------------------
+
+
+class TestTypePlannerParseRetry:
+    def test_retry_on_json_parse_failure(self):
+        """When extract_json fails, TypePlanner retries with a JSON-only prompt."""
+        valid_json = json.dumps({
+            "candidates": [
+                {
+                    "name": "WassersteinBall",
+                    "informal_description": "ball in Wasserstein space",
+                    "lean_signature": "def WassersteinBall := sorry",
+                    "depends_on": [],
+                    "is_in_mathlib": False,
+                }
+            ],
+            "dependency_graph": {"edges": [], "topological_order": ["WassersteinBall"]},
+            "mathlib_imports": [],
+        })
+
+        llm = MagicMock()
+
+        first_response = LLMResponse(
+            content="Let me think step by step about this...\n\nThe conjecture involves...",
+            token_usage=TokenUsage(input_tokens=100, output_tokens=200),
+        )
+        retry_response = LLMResponse(
+            content=valid_json,
+            token_usage=TokenUsage(input_tokens=80, output_tokens=150),
+        )
+        llm.complete.side_effect = [first_response, retry_response]
+
+        call_count = [0]
+        def extract_json_side_effect(text):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return None
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return None
+
+        llm.extract_json.side_effect = extract_json_side_effect
+
+        lean_search = MagicMock()
+        lean_search.execute.return_value = SearchResult(
+            status=ToolStatus.SUCCESS,
+            query="test",
+            entries=[],
+            total_results=0,
+        )
+
+        planner = TypePlanner(llm_client=llm, lean_search=lean_search)
+        ctx = AgentContext(task="test conjecture about Wasserstein balls")
+        result = planner.run(ctx)
+
+        assert llm.complete.call_count == 2
+        retry_call = llm.complete.call_args_list[1]
+        messages = retry_call[1]["messages"]
+        assert len(messages) == 3
+        assert "not valid JSON" in messages[2]["content"]
+
+        plan = TypePlan.model_validate(result.result)
+        assert len(plan.candidates) == 1
+        assert plan.candidates[0].name == "WassersteinBall"
+
+    def test_retry_also_fails_returns_empty(self):
+        """When both initial parse and retry fail, returns empty TypePlan."""
+        llm = MagicMock()
+
+        first_response = LLMResponse(
+            content="Some reasoning without JSON...",
+            token_usage=TokenUsage(input_tokens=100, output_tokens=200),
+        )
+        retry_response = LLMResponse(
+            content="Still no JSON here...",
+            token_usage=TokenUsage(input_tokens=80, output_tokens=100),
+        )
+        llm.complete.side_effect = [first_response, retry_response]
+        llm.extract_json.return_value = None
+
+        lean_search = MagicMock()
+        lean_search.execute.return_value = SearchResult(
+            status=ToolStatus.SUCCESS,
+            query="test",
+            entries=[],
+            total_results=0,
+        )
+
+        planner = TypePlanner(llm_client=llm, lean_search=lean_search)
+        ctx = AgentContext(task="test conjecture")
+        result = planner.run(ctx)
+
+        assert llm.complete.call_count == 2
+        plan = TypePlan.model_validate(result.result)
+        assert len(plan.candidates) == 0

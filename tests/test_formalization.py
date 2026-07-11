@@ -337,7 +337,7 @@ class TestTypePlanner:
         from agentic_research.agents.type_planner import TypePlanner
         from agentic_research.tools.lean_search import LeanSearch, SearchConfig, SearchBackend
 
-        llm = _make_mock_llm(["not valid json"])
+        llm = _make_mock_llm(["not valid json", "still not valid json"])
         search = LeanSearch(SearchConfig(backend=SearchBackend.MOCK))
 
         planner = TypePlanner(llm_client=llm, lean_search=search)

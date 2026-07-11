@@ -137,6 +137,7 @@ class AuctionScore(BaseModel):
     lemma_ratio: float = Field(default=0.0, description="Proportion of proved lemmas")
     brevity_score: float = Field(default=0.0, description="Inverse of code length, normalized")
     compilation_score: float = Field(default=0.0, description="1.0 if compiles, 0.0 otherwise")
+    semantic_alignment_score: float = Field(default=1.0, description="Intent faithfulness via IntentJudge")
     total_score: float = Field(default=0.0, description="Weighted composite score")
 
 

@@ -1,6 +1,9 @@
 """Best-of-k Auctioneer — evaluates parallel Type Formalizer candidates
-and selects the best one based on proved lemma ratio, brevity, and
-compilation success.
+and selects the best one based on proved lemma ratio, semantic alignment,
+brevity, and compilation success.
+
+Supports adaptive spawning: when no candidate meets the quality threshold,
+the caller can request extra candidates and re-evaluate all together.
 """
 
 from __future__ import annotations
@@ -26,17 +29,37 @@ from agentic_research.models.formalization import (
     TypeCandidate,
     TypeFormalizationCandidate,
 )
+from agentic_research.models.verification import IntentVerdictType
 from agentic_research.tools.lean_repl import LeanRepl
 
 log = get_logger(__name__)
 
-WEIGHT_LEMMA_RATIO = 0.5
-WEIGHT_BREVITY = 0.2
+WEIGHT_LEMMA_RATIO = 0.4
+WEIGHT_SEMANTIC_ALIGNMENT = 0.2
+WEIGHT_BREVITY = 0.1
 WEIGHT_COMPILATION = 0.3
 QUALITY_THRESHOLD = 0.3
 
+DEFAULT_K_EXTRA = 2
 
-def compute_auction_score(candidate: TypeFormalizationCandidate) -> AuctionScore:
+
+def _intent_verdict_to_score(verdict_type: IntentVerdictType, confidence: float) -> float:
+    """Map an IntentJudge verdict to a 0–1 alignment score.
+
+    CORRECT with high confidence → 1.0
+    CORRECT with low confidence → 0.75
+    INCORRECT with low confidence → 0.5 (uncertain)
+    INCORRECT with high confidence → 0.0
+    """
+    if verdict_type == IntentVerdictType.CORRECT:
+        return 1.0 if confidence >= 0.6 else 0.75
+    return 0.5 if confidence < 0.6 else 0.0
+
+
+def compute_auction_score(
+    candidate: TypeFormalizationCandidate,
+    semantic_alignment: float = 1.0,
+) -> AuctionScore:
     """Score a single candidate formalization."""
     lemma_ratio = candidate.proved_ratio
     compilation = 1.0 if candidate.compiles else 0.0
@@ -45,6 +68,7 @@ def compute_auction_score(candidate: TypeFormalizationCandidate) -> AuctionScore
 
     total = (
         WEIGHT_LEMMA_RATIO * lemma_ratio
+        + WEIGHT_SEMANTIC_ALIGNMENT * semantic_alignment
         + WEIGHT_BREVITY * brevity
         + WEIGHT_COMPILATION * compilation
     )
@@ -54,6 +78,7 @@ def compute_auction_score(candidate: TypeFormalizationCandidate) -> AuctionScore
         lemma_ratio=round(lemma_ratio, 4),
         brevity_score=round(brevity, 4),
         compilation_score=compilation,
+        semantic_alignment_score=round(semantic_alignment, 4),
         total_score=round(total, 4),
     )
 
@@ -67,19 +92,46 @@ class Auctioneer(BaseAgent):
         lean_repl: LeanRepl,
         *,
         k: int = 3,
+        k_extra: int = DEFAULT_K_EXTRA,
         quality_threshold: float = QUALITY_THRESHOLD,
         prover_config: ProverConfig | None = None,
+        intent_judge: object | None = None,
+        original_idea: str = "",
+        conjecture: str = "",
     ) -> None:
         super().__init__(name="auctioneer", max_retries=1)
         self._llm = llm_client
         self._repl = lean_repl
         self._k = k
+        self._k_extra = k_extra
         self._quality_threshold = quality_threshold
         self._prover_config = prover_config
+        self._intent_judge = intent_judge
+        self._original_idea = original_idea
+        self._conjecture = conjecture
 
     @property
     def k(self) -> int:
         return self._k
+
+    def _score_semantic_alignment(self, candidate: TypeFormalizationCandidate) -> float:
+        """Run IntentJudge on a candidate and return a 0–1 alignment score."""
+        if self._intent_judge is None or not candidate.lean_code:
+            return 1.0
+        try:
+            from agentic_research.agents.intent_judge import IntentJudge as IJType
+            judge: IJType = self._intent_judge  # type: ignore[assignment]
+            verdict = judge.judge(
+                lean_code=candidate.lean_code,
+                original_idea=self._original_idea or candidate.type_name,
+                conjecture=self._conjecture or candidate.type_name,
+            )
+            return _intent_verdict_to_score(
+                verdict.overall_verdict, verdict.overall_confidence
+            )
+        except Exception as exc:
+            log.warning("auctioneer_intent_judge_error", error=str(exc))
+            return 1.0
 
     def _execute(self, context: AgentContext) -> AgentResult:
         type_candidate = TypeCandidate.model_validate(
@@ -103,6 +155,22 @@ class Auctioneer(BaseAgent):
         )
 
         auction_result = self._evaluate(type_candidate.name, candidates)
+
+        if auction_result.verdict == AuctionVerdict.RETRY and self._k_extra > 0:
+            log.info(
+                "auctioneer_adaptive_spawn",
+                type_name=type_candidate.name,
+                k_extra=self._k_extra,
+            )
+            extra_candidates = self._run_parallel_formalizers(
+                type_candidate,
+                lemmas,
+                prior_definitions,
+                k_override=self._k_extra,
+                id_offset=len(candidates),
+            )
+            all_candidates = candidates + extra_candidates
+            auction_result = self._evaluate(type_candidate.name, all_candidates)
 
         log.info(
             "auctioneer_done",
@@ -129,18 +197,28 @@ class Auctioneer(BaseAgent):
         type_candidate: TypeCandidate,
         lemmas: list[LemmaStatement],
         prior_definitions: str,
+        *,
+        k_override: int | None = None,
+        id_offset: int = 0,
     ) -> list[TypeFormalizationCandidate]:
         """Run k type formalizers in parallel using asyncio."""
+        k = k_override if k_override is not None else self._k
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
 
         if loop and loop.is_running():
-            return self._run_sequential(type_candidate, lemmas, prior_definitions)
+            return self._run_sequential(
+                type_candidate, lemmas, prior_definitions,
+                k=k, id_offset=id_offset,
+            )
 
         return asyncio.run(
-            self._run_async(type_candidate, lemmas, prior_definitions)
+            self._run_async(
+                type_candidate, lemmas, prior_definitions,
+                k=k, id_offset=id_offset,
+            )
         )
 
     async def _run_async(
@@ -148,10 +226,15 @@ class Auctioneer(BaseAgent):
         type_candidate: TypeCandidate,
         lemmas: list[LemmaStatement],
         prior_definitions: str,
+        *,
+        k: int | None = None,
+        id_offset: int = 0,
     ) -> list[TypeFormalizationCandidate]:
+        count = k if k is not None else self._k
         loop = asyncio.get_event_loop()
         tasks = []
-        for i in range(self._k):
+        for i in range(count):
+            cid = id_offset + i
             tasks.append(
                 loop.run_in_executor(
                     None,
@@ -159,17 +242,18 @@ class Auctioneer(BaseAgent):
                     type_candidate,
                     lemmas,
                     prior_definitions,
-                    i,
+                    cid,
                 )
             )
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         candidates: list[TypeFormalizationCandidate] = []
         for i, result in enumerate(results):
+            cid = id_offset + i
             if isinstance(result, BaseException):
-                log.warning("auctioneer_candidate_error", candidate_id=i, error=str(result))
+                log.warning("auctioneer_candidate_error", candidate_id=cid, error=str(result))
                 candidates.append(TypeFormalizationCandidate(
-                    candidate_id=i,
+                    candidate_id=cid,
                     type_name=type_candidate.name,
                     compiles=False,
                 ))
@@ -182,19 +266,24 @@ class Auctioneer(BaseAgent):
         type_candidate: TypeCandidate,
         lemmas: list[LemmaStatement],
         prior_definitions: str,
+        *,
+        k: int | None = None,
+        id_offset: int = 0,
     ) -> list[TypeFormalizationCandidate]:
         """Fallback when already inside an event loop."""
+        count = k if k is not None else self._k
         candidates: list[TypeFormalizationCandidate] = []
-        for i in range(self._k):
+        for i in range(count):
+            cid = id_offset + i
             try:
                 candidate = self._run_single_formalizer(
-                    type_candidate, lemmas, prior_definitions, i
+                    type_candidate, lemmas, prior_definitions, cid
                 )
                 candidates.append(candidate)
             except Exception as exc:
-                log.warning("auctioneer_candidate_error", candidate_id=i, error=str(exc))
+                log.warning("auctioneer_candidate_error", candidate_id=cid, error=str(exc))
                 candidates.append(TypeFormalizationCandidate(
-                    candidate_id=i,
+                    candidate_id=cid,
                     type_name=type_candidate.name,
                     compiles=False,
                 ))
@@ -238,7 +327,14 @@ class Auctioneer(BaseAgent):
         type_name: str,
         candidates: list[TypeFormalizationCandidate],
     ) -> AuctionResult:
-        scores = [compute_auction_score(c) for c in candidates]
+        alignment_scores = {
+            c.candidate_id: self._score_semantic_alignment(c)
+            for c in candidates
+        }
+        scores = [
+            compute_auction_score(c, semantic_alignment=alignment_scores[c.candidate_id])
+            for c in candidates
+        ]
         scores.sort(key=lambda s: s.total_score, reverse=True)
 
         best = scores[0]

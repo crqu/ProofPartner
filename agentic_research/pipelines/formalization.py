@@ -15,6 +15,8 @@ from pathlib import Path
 
 from agentic_research.agents.auctioneer import Auctioneer
 from agentic_research.agents.claim_check import ClaimCheck
+from agentic_research.agents.informalizer import Informalizer
+from agentic_research.agents.intent_judge import IntentJudge
 from agentic_research.agents.lemma_planner import LemmaPlanner
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.theorem_formalizer import TheoremFormalizer
@@ -59,6 +61,7 @@ class FormalizationPipeline:
         prover_config: ProverConfig | None = None,
         artifact_dir: Path | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
+        use_intent_judge: bool = False,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -68,7 +71,9 @@ class FormalizationPipeline:
         self._prover_config = prover_config
         self._artifact_dir = artifact_dir
         self._progress_callback = progress_callback
+        self._use_intent_judge = use_intent_judge
         self._total_tokens = TokenUsage()
+        self._conjecture_nl: str = ""
 
     def _notify_progress(self, stage: str, message: str) -> None:
         if self._progress_callback is not None:
@@ -82,6 +87,7 @@ class FormalizationPipeline:
 
     def run(self, conjecture_nl: str) -> FormalizationPipelineResult:
         """Execute the full formalization pipeline."""
+        self._conjecture_nl = conjecture_nl
         log.info("formalization_pipeline_start", conjecture_len=len(conjecture_nl))
 
         # Stage 1: Type Planning
@@ -291,18 +297,30 @@ class FormalizationPipeline:
             total_failed_lemmas=total_failed,
         )
 
+    def _make_intent_judge(self) -> IntentJudge | None:
+        try:
+            informalizer = Informalizer(llm_client=self._llm)
+            return IntentJudge(llm_client=self._llm, informalizer=informalizer)
+        except Exception:
+            return None
+
     def _auction_type(
         self,
         candidate: TypeCandidate,
         lemmas: list[LemmaStatement],
         prior_definitions: str,
     ) -> AuctionResult:
+        intent_judge = self._make_intent_judge() if self._use_intent_judge else None
+
         for attempt in range(1, self._max_retries + 1):
             auctioneer = Auctioneer(
                 llm_client=self._llm,
                 lean_repl=self._repl,
                 k=self._k,
                 prover_config=self._prover_config,
+                intent_judge=intent_judge,
+                original_idea=self._conjecture_nl,
+                conjecture=self._conjecture_nl,
             )
 
             ctx = AgentContext(

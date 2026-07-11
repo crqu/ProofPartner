@@ -76,6 +76,7 @@ class ProofPipeline:
         use_proof_critic: bool = True,
         max_critic_retries: int = 2,
         use_proof_detailer: bool = True,
+        use_intent_judge: bool = False,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
@@ -91,6 +92,7 @@ class ProofPipeline:
         self._use_proof_critic = use_proof_critic
         self._max_critic_retries = max_critic_retries
         self._use_proof_detailer = use_proof_detailer
+        self._use_intent_judge = use_intent_judge
         self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
         self._statement_nl: str = ""
@@ -425,6 +427,13 @@ class ProofPipeline:
             return LemmaTree.model_validate(result.result)
         return None
 
+    def _make_intent_judge(self) -> IntentJudge | None:
+        try:
+            informalizer = Informalizer(llm_client=self._llm)
+            return IntentJudge(llm_client=self._llm, informalizer=informalizer)
+        except Exception:
+            return None
+
     def _run_type_first_formalization(self, statement_nl: str) -> str | None:
         """Run TypePlanner → LemmaPlanner → Auctioneer to get validated type defs.
 
@@ -475,11 +484,15 @@ class ProofPipeline:
             ordered = new_types
 
         self._notify_progress("Type Formalization", "Formalizing types with auction")
+        intent_judge = self._make_intent_judge() if self._use_intent_judge else None
         auctioneer = Auctioneer(
             llm_client=self._llm,
             lean_repl=self._repl,
             k=3,
             prover_config=self._prover_config,
+            intent_judge=intent_judge,
+            original_idea=self._statement_nl,
+            conjecture=self._statement_nl,
         )
 
         accepted_defs: list[str] = []

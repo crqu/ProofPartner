@@ -672,3 +672,162 @@ class TestProofPipelineDRODetection:
 
         assert pipeline._statement_nl == "The Wasserstein ball has bounded diameter"
         assert pipeline._lean_preamble is not None
+
+
+# ---------------------------------------------------------------------------
+# Type-first formalization wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTypeFirstFormalization:
+    """Verify TypePlanner → LemmaPlanner → Auctioneer runs before leanification."""
+
+    def test_type_first_runs_before_leanification(self):
+        """Type-first formalization is invoked before _run_lemma_leanifier."""
+        from unittest.mock import patch
+
+        pipeline = _make_pipeline()
+        call_order: list[str] = []
+
+        original_leanifier = pipeline._run_lemma_leanifier
+
+        def track_type_first(stmt_nl):
+            call_order.append("type_first")
+            return None
+
+        def track_leanifier(tree):
+            call_order.append("leanifier")
+            return original_leanifier(tree)
+
+        search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            needs_decomposition=True,
+            failure_reason="needs decomposition",
+        )
+
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        dummy_tree = LemmaTree(
+            root_id="root",
+            topological_order=["root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                ),
+            },
+        )
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=search_result), \
+             patch.object(pipeline, "_try_proof_correction", return_value=None), \
+             patch.object(pipeline, "_run_lemma_breakdown", return_value=dummy_tree), \
+             patch.object(pipeline, "_run_type_first_formalization", side_effect=track_type_first), \
+             patch.object(pipeline, "_run_lemma_leanifier", side_effect=track_leanifier):
+            pipeline.run("theorem foo : True", statement_nl="some NL statement")
+
+        assert call_order.index("type_first") < call_order.index("leanifier")
+
+    def test_leanifier_receives_type_context(self):
+        """LemmaLeanifier's lean_preamble includes type definitions from auction."""
+        from unittest.mock import patch
+        from agentic_research.models.proof import LemmaTree, ProofNode, RecursiveProofResult
+
+        pipeline = _make_pipeline()
+        type_defs = "structure MyType where\n  val : Nat"
+
+        search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            needs_decomposition=True,
+            failure_reason="needs decomposition",
+        )
+
+        dummy_tree = LemmaTree(
+            root_id="root",
+            topological_order=["root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                ),
+            },
+        )
+
+        leanifier_preamble = None
+
+        def capture_leanifier(tree):
+            nonlocal leanifier_preamble
+            leanifier_preamble = pipeline._lean_preamble
+            return tree
+
+        failed_prover = RecursiveProofResult(
+            root_statement="theorem root : True := sorry",
+            failure_reason="skip",
+        )
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=search_result), \
+             patch.object(pipeline, "_try_proof_correction", return_value=None), \
+             patch.object(pipeline, "_run_lemma_breakdown", return_value=dummy_tree), \
+             patch.object(pipeline, "_run_type_first_formalization", return_value=type_defs), \
+             patch.object(pipeline, "_run_lemma_leanifier", side_effect=capture_leanifier), \
+             patch.object(pipeline, "_run_recursive_prover", return_value=failed_prover):
+            pipeline.run("theorem foo : True", statement_nl="some NL statement")
+
+        assert leanifier_preamble is not None
+        assert "MyType" in leanifier_preamble
+
+    def test_type_first_failure_falls_back(self):
+        """If type formalization fails, pipeline proceeds without type context."""
+        from unittest.mock import patch
+        from agentic_research.models.proof import LemmaTree, ProofNode, RecursiveProofResult
+
+        pipeline = _make_pipeline()
+
+        search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            needs_decomposition=True,
+            failure_reason="needs decomposition",
+        )
+
+        dummy_tree = LemmaTree(
+            root_id="root",
+            topological_order=["root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                ),
+            },
+        )
+
+        leanifier_preamble_at_call = None
+
+        def capture_leanifier(tree):
+            nonlocal leanifier_preamble_at_call
+            leanifier_preamble_at_call = pipeline._lean_preamble
+            return tree
+
+        failed_prover = RecursiveProofResult(
+            root_statement="theorem root : True := sorry",
+            failure_reason="skip",
+        )
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=search_result), \
+             patch.object(pipeline, "_try_proof_correction", return_value=None), \
+             patch.object(pipeline, "_run_lemma_breakdown", return_value=dummy_tree), \
+             patch.object(pipeline, "_run_type_first_formalization", return_value=None), \
+             patch.object(pipeline, "_run_lemma_leanifier", side_effect=capture_leanifier), \
+             patch.object(pipeline, "_run_recursive_prover", return_value=failed_prover):
+            pipeline.run("theorem foo : True", statement_nl="some NL statement")
+
+        assert leanifier_preamble_at_call is None

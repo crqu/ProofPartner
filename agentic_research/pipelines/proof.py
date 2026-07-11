@@ -11,11 +11,13 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from agentic_research.agents.auctioneer import Auctioneer
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
 from agentic_research.agents.informalizer import Informalizer
 from agentic_research.agents.intent_judge import IntentJudge
 from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+from agentic_research.agents.lemma_planner import LemmaPlanner
 from agentic_research.agents.proof_critic import ProofCritic
 from agentic_research.agents.proof_detailer import ProofDetailer
 from agentic_research.agents.lemma_leanifier import LemmaLeanifier
@@ -23,10 +25,17 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.proof_corrector import ProofCorrector
 from agentic_research.agents.proof_search import ProofSearchAgent
 from agentic_research.agents.recursive_prover import RecursiveProver
+from agentic_research.agents.type_planner import TypePlanner
 from agentic_research.logging import get_logger
 from agentic_research.models.agents import AgentContext, AgentStatus, ProverConfig, TokenUsage
 from agentic_research.models.external_prover import ExternalProverConfig
-from agentic_research.models.formalization import ClaimCheckVerdict
+from agentic_research.models.formalization import (
+    AuctionResult,
+    AuctionVerdict,
+    ClaimCheckVerdict,
+    LemmaStatement,
+    TypePlan,
+)
 from agentic_research.models.proof import (
     CritiqueIssue,
     CritiqueResult,
@@ -253,6 +262,14 @@ class ProofPipeline:
         if self._use_proof_detailer:
             tree = self._run_proof_detailer(tree)
 
+        type_defs = self._run_type_first_formalization(self._statement_nl)
+        if type_defs:
+            self._lean_preamble = (
+                f"{self._lean_preamble}\n\n{type_defs}"
+                if self._lean_preamble
+                else type_defs
+            )
+
         self._notify_progress("Leanification", "Converting lemmas to Lean 4")
         tree = self._run_lemma_leanifier(tree)
         if tree is None:
@@ -397,6 +414,95 @@ class ProofPipeline:
         if result.status == AgentStatus.SUCCESS and result.result:
             return LemmaTree.model_validate(result.result)
         return None
+
+    def _run_type_first_formalization(self, statement_nl: str) -> str | None:
+        """Run TypePlanner → LemmaPlanner → Auctioneer to get validated type defs.
+
+        Returns accepted type definitions as Lean 4 code, or None on failure.
+        """
+        if not statement_nl:
+            return None
+
+        self._notify_progress("Type Planning", "Identifying domain types")
+        planner = TypePlanner(llm_client=self._llm, lean_search=self._search)
+        ctx = AgentContext(task=statement_nl)
+        result = planner.run(ctx)
+        self._accumulate_tokens(planner.cumulative_tokens)
+        if result.status != AgentStatus.SUCCESS or not result.result:
+            log.warning("type_first_planning_failed")
+            return None
+        type_plan = TypePlan.model_validate(result.result)
+
+        new_types = [
+            c for c in type_plan.candidates
+            if not c.is_in_mathlib and not c.composition_alternative
+        ]
+        if not new_types:
+            log.info("type_first_no_new_types")
+            return None
+
+        lemma_planner = LemmaPlanner(llm_client=self._llm)
+        lemma_ctx = AgentContext(
+            task="plan lemmas",
+            metadata={"type_plan": type_plan.model_dump()},
+        )
+        lemma_result = lemma_planner.run(lemma_ctx)
+        self._accumulate_tokens(lemma_planner.cumulative_tokens)
+
+        lemmas_by_type: dict[str, list[LemmaStatement]] = {}
+        if lemma_result.status == AgentStatus.SUCCESS and lemma_result.result:
+            for lem in lemma_result.result.get("lemmas", []):
+                ls = LemmaStatement.model_validate(lem)
+                lemmas_by_type.setdefault(ls.for_type, []).append(ls)
+
+        topo_order = type_plan.dependency_graph.topological_order
+        if topo_order:
+            ordered = sorted(
+                new_types,
+                key=lambda c: topo_order.index(c.name) if c.name in topo_order else len(topo_order),
+            )
+        else:
+            ordered = new_types
+
+        self._notify_progress("Type Formalization", "Formalizing types with auction")
+        auctioneer = Auctioneer(
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            k=3,
+            prover_config=self._prover_config,
+        )
+
+        accepted_defs: list[str] = []
+        prior_definitions = ""
+        for candidate in ordered:
+            lemmas = lemmas_by_type.get(candidate.name, [])
+            auction_ctx = AgentContext(
+                task=candidate.name,
+                metadata={
+                    "type_candidate": candidate.model_dump(),
+                    "lemmas": [lem.model_dump() for lem in lemmas],
+                    "prior_definitions": prior_definitions,
+                },
+            )
+            auction_result_raw = auctioneer.run(auction_ctx)
+            if auction_result_raw.result:
+                ar = AuctionResult.model_validate(auction_result_raw.result)
+                if ar.verdict == AuctionVerdict.ACCEPTED and ar.winning_candidate:
+                    code = ar.winning_candidate.lean_code
+                    accepted_defs.append(code)
+                    prior_definitions = (
+                        f"{prior_definitions}\n\n{code}" if prior_definitions else code
+                    )
+
+        self._accumulate_tokens(auctioneer.cumulative_tokens)
+
+        if not accepted_defs:
+            log.info("type_first_no_types_accepted")
+            return None
+
+        type_context = "\n\n".join(accepted_defs)
+        log.info("type_first_formalization_done", num_types=len(accepted_defs))
+        return type_context
 
     def _run_lemma_leanifier(self, tree: LemmaTree) -> LemmaTree | None:
         agent = LemmaLeanifier(

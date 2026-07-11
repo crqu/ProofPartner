@@ -9,6 +9,7 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
     DATA_PACKAGE_SYSTEM,
     DATA_PACKAGE_USER_TEMPLATE,
+    PREAMBLE_CONTEXT_SECTION,
     TYPE_PLANNER_SYSTEM,
     TYPE_PLANNER_USER_TEMPLATE,
 )
@@ -54,6 +55,7 @@ class TypePlanner(BaseAgent):
 
     def _execute(self, context: AgentContext) -> AgentResult:
         conjecture = context.task
+        lean_preamble = context.metadata.get("lean_preamble")
         log.info("type_planner_start", conjecture_len=len(conjecture))
 
         search_result = self._search.execute(conjecture[:120])
@@ -74,6 +76,11 @@ class TypePlanner(BaseAgent):
             mathlib_results=mathlib_summary,
         )
 
+        if lean_preamble:
+            user_content += PREAMBLE_CONTEXT_SECTION.format(
+                lean_preamble=lean_preamble,
+            )
+
         response = self._llm.complete(
             system=TYPE_PLANNER_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
@@ -84,6 +91,8 @@ class TypePlanner(BaseAgent):
         plan = self._parse_response(response.content, conjecture, user_content)
 
         plan = self._apply_mathlib_grounding(plan, mathlib_grounded)
+        if lean_preamble:
+            plan = self._apply_preamble_grounding(plan, lean_preamble)
 
         log.info(
             "type_planner_done",
@@ -143,6 +152,23 @@ class TypePlanner(BaseAgent):
                 analog_lower = candidate.mathlib_analog.lower()
                 if analog_lower in grounded_lower:
                     candidate.is_in_mathlib = True
+        return plan
+
+    def _apply_preamble_grounding(
+        self,
+        plan: TypePlan,
+        lean_preamble: str,
+    ) -> TypePlan:
+        """Mark candidates whose names appear in the lean preamble as
+        is_in_preamble=True so the pipeline skips re-deriving them."""
+        preamble_lower = lean_preamble.lower()
+        for candidate in plan.candidates:
+            if candidate.name.lower() in preamble_lower:
+                candidate.is_in_preamble = True
+                log.info(
+                    "type_planner_preamble_match",
+                    candidate=candidate.name,
+                )
         return plan
 
     def _format_search(self, search_result) -> str:

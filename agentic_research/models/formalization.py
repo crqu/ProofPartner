@@ -27,6 +27,10 @@ class TypeCandidate(BaseModel):
         default=False,
         description="Whether this type already exists in Mathlib",
     )
+    is_in_preamble: bool = Field(
+        default=False,
+        description="Whether this type is already defined in the lean preamble (data package)",
+    )
     composition_alternative: str | None = Field(
         default=None,
         description="Lean 4 expression composing existing Mathlib types to represent this concept. When set, the pipeline should use this expression instead of inventing a new type definition.",

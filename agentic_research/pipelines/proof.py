@@ -412,6 +412,8 @@ class ProofPipeline:
             "statement_lean": lean_statement,
             "failed_attempts": failed_strategies or "None",
         }
+        if self._lean_preamble:
+            metadata["lean_preamble"] = self._lean_preamble
         if critic_feedback:
             metadata["critic_issues"] = [
                 issue.model_dump() for issue in critic_feedback
@@ -445,7 +447,10 @@ class ProofPipeline:
 
         self._notify_progress("Type Planning", "Identifying domain types")
         planner = TypePlanner(llm_client=self._llm, lean_search=self._search)
-        ctx = AgentContext(task=statement_nl)
+        metadata: dict = {}
+        if self._lean_preamble:
+            metadata["lean_preamble"] = self._lean_preamble
+        ctx = AgentContext(task=statement_nl, metadata=metadata)
         result = planner.run(ctx)
         self._accumulate_tokens(planner.cumulative_tokens)
         if result.status != AgentStatus.SUCCESS or not result.result:
@@ -455,7 +460,7 @@ class ProofPipeline:
 
         new_types = [
             c for c in type_plan.candidates
-            if not c.is_in_mathlib and not c.composition_alternative
+            if not c.is_in_mathlib and not c.is_in_preamble and not c.composition_alternative
         ]
         if not new_types:
             log.info("type_first_no_new_types")

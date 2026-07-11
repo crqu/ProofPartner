@@ -50,12 +50,16 @@ class LemmaLeanifier(BaseAgent):
         *,
         max_compile_retries: int = MAX_COMPILE_RETRIES,
         lean_preamble: str | None = None,
+        prebuilt_axioms: dict[str, str] | None = None,
+        axiom_keywords: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__(name="lemma_leanifier", max_retries=1)
         self._llm = llm_client
         self._repl = lean_repl
         self._max_compile_retries = max_compile_retries
         self._lean_preamble = lean_preamble
+        self._prebuilt_axioms = prebuilt_axioms
+        self._axiom_keywords = axiom_keywords
 
     def _compile(self, lean_code: str):
         """Execute lean_code in the REPL, prepending the preamble if set."""
@@ -119,9 +123,41 @@ class LemmaLeanifier(BaseAgent):
             error_message=f"Failed to leanify: {failed_nodes}" if failed_nodes else None,
         )
 
+    _MATCH_THRESHOLD = 2
+
+    def _match_prebuilt_axiom(self, node: ProofNode) -> str | None:
+        """Try to match a node to a pre-built axiom declaration.
+
+        Uses keyword overlap between the node statement_nl and axiom keywords.
+        Returns the full axiom declaration if matched, None otherwise.
+        """
+        if not self._prebuilt_axioms or not self._axiom_keywords:
+            return None
+
+        statement_lower = node.statement_nl.lower()
+        best_name: str | None = None
+        best_overlap = 0
+
+        for axiom_name, keywords in self._axiom_keywords.items():
+            if axiom_name not in self._prebuilt_axioms:
+                continue
+            overlap = sum(1 for kw in keywords if kw in statement_lower)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_name = axiom_name
+
+        if best_overlap >= self._MATCH_THRESHOLD and best_name is not None:
+            return self._prebuilt_axioms[best_name]
+        return None
+
     def _leanify_node(
         self, node: ProofNode, parent_statement: str, sibling_statements: str
     ) -> tuple[str | None, TokenUsage]:
+        prebuilt = self._match_prebuilt_axiom(node)
+        if prebuilt:
+            log.info("prebuilt_axiom_matched", node_id=node.node_id, axiom=prebuilt[:50])
+            return prebuilt, TokenUsage()
+
         if node.from_prior_work:
             axiom_code, axiom_tokens = self._axiomatize_node(
                 node, parent_statement, sibling_statements

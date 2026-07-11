@@ -172,6 +172,7 @@ class LemmaLeanifier(BaseAgent):
                 previous_attempt=lean_code,
                 errors=errors,
             )
+            feedback_content += self._definitions_context()
 
             response = self._llm.complete(
                 system=LEMMA_LEANIFY_SYSTEM,

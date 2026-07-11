@@ -12,6 +12,7 @@ from agentic_research.agents.prompt_templates import (
     CRITIC_FEEDBACK_SECTION,
     LEMMA_BREAKDOWN_SYSTEM,
     LEMMA_BREAKDOWN_USER_TEMPLATE,
+    PREAMBLE_CONTEXT_SECTION,
 )
 from agentic_research.logging import get_logger
 from agentic_research.models.agents import (
@@ -81,12 +82,18 @@ class LemmaBreakdown(BaseAgent):
         parent_id = context.metadata.get("parent_id", "root")
         depth = context.metadata.get("depth", 0)
         critic_issues = context.metadata.get("critic_issues", [])
+        lean_preamble = context.metadata.get("lean_preamble")
 
         user_content = LEMMA_BREAKDOWN_USER_TEMPLATE.format(
             statement_nl=statement_nl,
             statement_lean=statement_lean,
             failed_attempts=failed_attempts,
         )
+
+        if lean_preamble:
+            user_content += PREAMBLE_CONTEXT_SECTION.format(
+                lean_preamble=lean_preamble,
+            )
 
         if critic_issues:
             issues_formatted = self.format_critic_feedback(critic_issues)

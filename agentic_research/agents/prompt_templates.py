@@ -1017,6 +1017,20 @@ Relevant lemmas: {relevant_lemmas}
 Provide the complete proof (the full theorem with its proof) inside a ```lean code block.
 """
 
+PREAMBLE_CONTEXT_SECTION = """\
+
+## Available Lean 4 Definitions (Prior Work)
+The following types and definitions are already available in scope. \
+Treat these as established prior work — do not re-derive them. \
+Mark any lemma that is a basic property of these definitions as \
+from_prior_work=true with source_reference indicating it follows \
+from the available definitions.
+
+```lean
+{lean_preamble}
+```
+"""
+
 LEMMA_BREAKDOWN_SYSTEM = """\
 You are an expert mathematician. Given a theorem that is too complex to prove \
 directly, decompose it into simpler sub-lemmas.

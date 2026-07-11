@@ -782,6 +782,12 @@ class TestTypeFirstFormalization:
         assert leanifier_preamble is not None
         assert "MyType" in leanifier_preamble
 
+    def test_default_config_enables_critic_and_detailer(self):
+        """ProofPipeline with default config has both critic and detailer enabled."""
+        pipeline = _make_pipeline()
+        assert pipeline._use_proof_critic is True
+        assert pipeline._use_proof_detailer is True
+
     def test_type_first_failure_falls_back(self):
         """If type formalization fails, pipeline proceeds without type context."""
         from unittest.mock import patch

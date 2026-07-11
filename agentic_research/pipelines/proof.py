@@ -72,9 +72,9 @@ class ProofPipeline:
         use_claim_check: bool = True,
         use_external_prover: bool = False,
         external_prover_config: ExternalProverConfig | None = None,
-        use_proof_critic: bool = False,
+        use_proof_critic: bool = True,
         max_critic_retries: int = 2,
-        use_proof_detailer: bool = False,
+        use_proof_detailer: bool = True,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client

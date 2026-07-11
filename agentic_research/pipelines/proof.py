@@ -11,11 +11,13 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from agentic_research.agents.auctioneer import Auctioneer
 from agentic_research.agents.claim_check import ClaimCheck
 from agentic_research.agents.flatten_finalize import FlattenFinalize
 from agentic_research.agents.informalizer import Informalizer
 from agentic_research.agents.intent_judge import IntentJudge
 from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+from agentic_research.agents.lemma_planner import LemmaPlanner
 from agentic_research.agents.proof_critic import ProofCritic
 from agentic_research.agents.proof_detailer import ProofDetailer
 from agentic_research.agents.lemma_leanifier import LemmaLeanifier
@@ -23,12 +25,20 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.proof_corrector import ProofCorrector
 from agentic_research.agents.proof_search import ProofSearchAgent
 from agentic_research.agents.recursive_prover import RecursiveProver
+from agentic_research.agents.type_planner import TypePlanner
 from agentic_research.logging import get_logger
 from agentic_research.models.agents import AgentContext, AgentStatus, ProverConfig, TokenUsage
 from agentic_research.models.external_prover import ExternalProverConfig
-from agentic_research.models.formalization import ClaimCheckVerdict
+from agentic_research.models.formalization import (
+    AuctionResult,
+    AuctionVerdict,
+    ClaimCheckVerdict,
+    LemmaStatement,
+    TypePlan,
+)
 from agentic_research.models.proof import (
     CritiqueIssue,
+    CritiqueIssueType,
     CritiqueResult,
     ErrorCategory,
     FailureDiagnosis,
@@ -63,9 +73,10 @@ class ProofPipeline:
         use_claim_check: bool = True,
         use_external_prover: bool = False,
         external_prover_config: ExternalProverConfig | None = None,
-        use_proof_critic: bool = False,
+        use_proof_critic: bool = True,
         max_critic_retries: int = 2,
-        use_proof_detailer: bool = False,
+        use_proof_detailer: bool = True,
+        use_intent_judge: bool = False,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
@@ -81,6 +92,7 @@ class ProofPipeline:
         self._use_proof_critic = use_proof_critic
         self._max_critic_retries = max_critic_retries
         self._use_proof_detailer = use_proof_detailer
+        self._use_intent_judge = use_intent_judge
         self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
         self._statement_nl: str = ""
@@ -253,6 +265,14 @@ class ProofPipeline:
         if self._use_proof_detailer:
             tree = self._run_proof_detailer(tree)
 
+        type_defs = self._run_type_first_formalization(self._statement_nl)
+        if type_defs:
+            self._lean_preamble = (
+                f"{self._lean_preamble}\n\n{type_defs}"
+                if self._lean_preamble
+                else type_defs
+            )
+
         self._notify_progress("Leanification", "Converting lemmas to Lean 4")
         tree = self._run_lemma_leanifier(tree)
         if tree is None:
@@ -272,6 +292,15 @@ class ProofPipeline:
         recursive_result = self._run_recursive_prover(tree)
 
         if not recursive_result.proved or not recursive_result.lemma_tree:
+            weak_feedback = self._extract_weak_child_feedback(recursive_result)
+            if weak_feedback:
+                retried = self._retry_on_weak_children(
+                    lean_statement, statement_nl, search_result,
+                    weak_feedback, pipeline_start,
+                )
+                if retried is not None:
+                    return retried
+
             return ProofPipelineResult(
                 statement=lean_statement,
                 search_result=search_result,
@@ -398,6 +427,106 @@ class ProofPipeline:
             return LemmaTree.model_validate(result.result)
         return None
 
+    def _make_intent_judge(self) -> IntentJudge | None:
+        try:
+            informalizer = Informalizer(llm_client=self._llm)
+            return IntentJudge(llm_client=self._llm, informalizer=informalizer)
+        except Exception:
+            return None
+
+    def _run_type_first_formalization(self, statement_nl: str) -> str | None:
+        """Run TypePlanner → LemmaPlanner → Auctioneer to get validated type defs.
+
+        Returns accepted type definitions as Lean 4 code, or None on failure.
+        """
+        if not statement_nl:
+            return None
+
+        self._notify_progress("Type Planning", "Identifying domain types")
+        planner = TypePlanner(llm_client=self._llm, lean_search=self._search)
+        ctx = AgentContext(task=statement_nl)
+        result = planner.run(ctx)
+        self._accumulate_tokens(planner.cumulative_tokens)
+        if result.status != AgentStatus.SUCCESS or not result.result:
+            log.warning("type_first_planning_failed")
+            return None
+        type_plan = TypePlan.model_validate(result.result)
+
+        new_types = [
+            c for c in type_plan.candidates
+            if not c.is_in_mathlib and not c.composition_alternative
+        ]
+        if not new_types:
+            log.info("type_first_no_new_types")
+            return None
+
+        lemma_planner = LemmaPlanner(llm_client=self._llm)
+        lemma_ctx = AgentContext(
+            task="plan lemmas",
+            metadata={"type_plan": type_plan.model_dump()},
+        )
+        lemma_result = lemma_planner.run(lemma_ctx)
+        self._accumulate_tokens(lemma_planner.cumulative_tokens)
+
+        lemmas_by_type: dict[str, list[LemmaStatement]] = {}
+        if lemma_result.status == AgentStatus.SUCCESS and lemma_result.result:
+            for lem in lemma_result.result.get("lemmas", []):
+                ls = LemmaStatement.model_validate(lem)
+                lemmas_by_type.setdefault(ls.for_type, []).append(ls)
+
+        topo_order = type_plan.dependency_graph.topological_order
+        if topo_order:
+            ordered = sorted(
+                new_types,
+                key=lambda c: topo_order.index(c.name) if c.name in topo_order else len(topo_order),
+            )
+        else:
+            ordered = new_types
+
+        self._notify_progress("Type Formalization", "Formalizing types with auction")
+        intent_judge = self._make_intent_judge() if self._use_intent_judge else None
+        auctioneer = Auctioneer(
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            k=3,
+            prover_config=self._prover_config,
+            intent_judge=intent_judge,
+            original_idea=self._statement_nl,
+            conjecture=self._statement_nl,
+        )
+
+        accepted_defs: list[str] = []
+        prior_definitions = ""
+        for candidate in ordered:
+            lemmas = lemmas_by_type.get(candidate.name, [])
+            auction_ctx = AgentContext(
+                task=candidate.name,
+                metadata={
+                    "type_candidate": candidate.model_dump(),
+                    "lemmas": [lem.model_dump() for lem in lemmas],
+                    "prior_definitions": prior_definitions,
+                },
+            )
+            auction_result_raw = auctioneer.run(auction_ctx)
+            if auction_result_raw.result:
+                ar = AuctionResult.model_validate(auction_result_raw.result)
+                if ar.verdict == AuctionVerdict.ACCEPTED and ar.winning_candidate:
+                    code = ar.winning_candidate.lean_code
+                    accepted_defs.append(code)
+                    prior_definitions = (
+                        f"{prior_definitions}\n\n{code}" if prior_definitions else code
+                    )
+
+        self._accumulate_tokens(auctioneer.cumulative_tokens)
+
+        if not accepted_defs:
+            log.info("type_first_no_types_accepted")
+            return None
+
+        type_context = "\n\n".join(accepted_defs)
+        log.info("type_first_formalization_done", num_types=len(accepted_defs))
+        return type_context
+
     def _run_lemma_leanifier(self, tree: LemmaTree) -> LemmaTree | None:
         agent = LemmaLeanifier(
             llm_client=self._llm,
@@ -435,6 +564,113 @@ class ProofPipeline:
             root_statement=tree.nodes[tree.root_id].statement_lean,
             failure_reason="Recursive prover returned no result",
         )
+
+    _MAX_WEAK_CHILD_RETRIES = 2
+
+    @staticmethod
+    def _extract_weak_child_feedback(
+        recursive_result: RecursiveProofResult,
+    ) -> list[CritiqueIssue]:
+        """Extract WEAK_CHILD_LEMMA diagnoses from a failed recursive proof."""
+        if not recursive_result.lemma_tree:
+            return []
+        issues: list[CritiqueIssue] = []
+        for node in recursive_result.lemma_tree.nodes.values():
+            if (
+                node.failure_diagnosis
+                and node.failure_diagnosis.failure_type == FailureType.WEAK_CHILD_LEMMA
+            ):
+                issues.append(
+                    CritiqueIssue(
+                        issue_type=CritiqueIssueType.WEAK_CHILD_LEMMA,
+                        node_id=node.failure_diagnosis.problematic_child_id or node.node_id,
+                        description=node.failure_diagnosis.description,
+                        severity="blocking",
+                        suggested_fix=node.failure_diagnosis.suggested_fix,
+                    )
+                )
+        return issues
+
+    def _retry_on_weak_children(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+        search_result: ProofSearchResult,
+        weak_feedback: list[CritiqueIssue],
+        pipeline_start: float,
+    ) -> ProofPipelineResult | None:
+        """Retry lemma breakdown when WEAK_CHILD_LEMMA is detected."""
+        for attempt in range(self._MAX_WEAK_CHILD_RETRIES):
+            log.info(
+                "proof_pipeline_weak_child_retry",
+                attempt=attempt + 1,
+                weak_children=len(weak_feedback),
+            )
+            self._notify_progress(
+                "Lemma Breakdown",
+                f"Retrying decomposition (weak child feedback, attempt {attempt + 1})",
+            )
+
+            tree = self._run_lemma_breakdown(
+                lean_statement, statement_nl, search_result,
+                critic_feedback=weak_feedback,
+            )
+            if tree is None:
+                return None
+
+            if self._use_proof_detailer:
+                tree = self._run_proof_detailer(tree)
+
+            self._notify_progress("Leanification", "Re-converting lemmas to Lean 4")
+            tree = self._run_lemma_leanifier(tree)
+            if tree is None:
+                return None
+
+            has_axiom_nodes = any(n.from_prior_work for n in tree.nodes.values())
+            if has_axiom_nodes:
+                self._verify_axiom_nodes(tree, statement_nl)
+
+            self._notify_progress("Recursive Prover", "Re-proving with revised decomposition")
+            recursive_result = self._run_recursive_prover(tree)
+
+            if recursive_result.proved and recursive_result.lemma_tree:
+                self._notify_progress("Finalization", "Assembling final proof")
+                final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
+                if final_proof:
+                    if self._use_claim_check:
+                        passed = self._run_claim_check(lean_statement, final_proof)
+                        if not passed:
+                            return ProofPipelineResult(
+                                statement=lean_statement,
+                                search_result=search_result,
+                                recursive_result=recursive_result,
+                                claim_check_passed=False,
+                                failure_stage="claim_check",
+                                failure_reason="Claim check failed after weak-child retry",
+                                total_token_usage=self._total_tokens,
+                            )
+
+                    log.info(
+                        "proof_pipeline_weak_child_retry_success",
+                        attempt=attempt + 1,
+                        elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
+                    )
+                    return ProofPipelineResult(
+                        statement=lean_statement,
+                        proved=True,
+                        final_proof=final_proof,
+                        search_result=search_result,
+                        recursive_result=recursive_result,
+                        claim_check_passed=True,
+                        total_token_usage=self._total_tokens,
+                    )
+
+            new_feedback = self._extract_weak_child_feedback(recursive_result)
+            if not new_feedback:
+                break
+            weak_feedback = new_feedback
+
+        return None
 
     def _run_flatten_finalize(self, tree: LemmaTree) -> str | None:
         agent = FlattenFinalize(llm_client=self._llm, lean_repl=self._repl)

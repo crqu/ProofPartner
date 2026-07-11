@@ -706,7 +706,7 @@ class TestFormatChildDeclaration:
         assert result.startswith("axiom lemma_1 :")
         assert "-- Use: have <result> := lemma_1 <args>" in result
 
-    def test_non_axiom_node_preserves_statement(self):
+    def test_non_axiom_node_converted_to_axiom(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         child = ProofNode(
@@ -716,7 +716,8 @@ class TestFormatChildDeclaration:
             from_prior_work=False,
         )
         result = RecursiveProver._format_child_declaration(child)
-        assert result.startswith("theorem lemma_2")
+        assert result.startswith("axiom lemma_2")
+        assert "sorry" not in result.split("\n")[0]
         assert "-- Use: have <result> := lemma_2 <args>" in result
 
     def test_axiom_node_already_prefixed(self):
@@ -1329,3 +1330,475 @@ class TestProofCriticRetryFeedback:
         assert breakdown_calls[1] is not None
         assert len(breakdown_calls[1]) == 2
         assert breakdown_calls[1][0].issue_type == CritiqueIssueType.UNSTATED_HYPOTHESIS
+
+
+# ---------------------------------------------------------------------------
+# Parent-before-children validation (H3)
+# ---------------------------------------------------------------------------
+
+
+class TestParentBeforeChildrenSorryStubs:
+    """Verify parent proof receives child axiom declarations as context."""
+
+    def test_parent_proof_includes_child_axiom_stubs(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent : Nat → Nat := sorry",
+                    children=["child_1", "child_2"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="first helper",
+                    statement_lean="theorem child_1 : Nat → Bool := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+                "child_2": ProofNode(
+                    node_id="child_2",
+                    statement_nl="second helper",
+                    statement_lean="lemma child_2 : Bool → Nat := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "child_2", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent : Nat → Nat := trivial\n```",
+            "```lean\ntheorem child_1 : Nat → Bool := trivial\n```",
+            "```lean\ntheorem child_2 : Bool → Nat := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        parent_call = llm.complete.call_args_list[0]
+        user_msg = parent_call[1]["messages"][0]["content"]
+        assert "axiom child_1" in user_msg
+        assert "axiom child_2" in user_msg
+        assert "sorry" not in user_msg.split("Child Lemma Declarations")[1]
+
+    def test_child_declarations_formatted_as_axioms(self):
+        """All children (not just from_prior_work) become axiom declarations."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        regular_child = ProofNode(
+            node_id="lemma_1",
+            statement_nl="helper",
+            statement_lean="theorem lemma_1 : True := sorry",
+            from_prior_work=False,
+        )
+        result = RecursiveProver._format_child_declaration(regular_child)
+        assert result.startswith("axiom lemma_1")
+        assert "sorry" not in result.split("\n")[0]
+
+    def test_child_declaration_preserves_axiom_prefix(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_3",
+            statement_nl="existing axiom",
+            statement_lean="axiom lemma_3 : True",
+            from_prior_work=True,
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert result.startswith("axiom lemma_3")
+        assert result.count("axiom") == 1
+
+
+class TestWeakChildLemmaDetection:
+    """Verify WEAK_CHILD_LEMMA is detected when parent fails with stubs."""
+
+    def test_weak_child_diagnosed_on_parent_failure(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="weak child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        diagnosis_json = (
+            '{"failure_type": "weak_child_lemma", '
+            '"description": "child_1 too weak", '
+            '"suggested_fix": "strengthen child_1"}'
+        )
+        llm = _make_mock_llm([
+            "```lean\n-- MOCK_ERROR\nfailed proof\n```",
+            diagnosis_json,
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+            max_retries_per_node=1,
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        result = agent.run(ctx)
+
+        assert result.status == AgentStatus.FAILURE
+        rr = RecursiveProofResult.model_validate(result.result)
+        assert not rr.proved
+        root_node = rr.lemma_tree.nodes["root"]
+        assert root_node.failure_diagnosis is not None
+        assert root_node.failure_diagnosis.failure_type == FailureType.WEAK_CHILD_LEMMA
+
+    def test_successful_parent_then_recurse_children(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1", "child_2"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="first helper",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+                "child_2": ProofNode(
+                    node_id="child_2",
+                    statement_nl="second helper",
+                    statement_lean="theorem child_2 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "child_2", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+            "```lean\ntheorem child_2 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        result = agent.run(ctx)
+
+        assert result.status == AgentStatus.SUCCESS
+        rr = RecursiveProofResult.model_validate(result.result)
+        assert rr.proved
+        assert rr.proved_nodes == 3
+        assert rr.lemma_tree.nodes["root"].status == NodeStatus.PROVED
+        assert rr.lemma_tree.nodes["child_1"].status == NodeStatus.PROVED
+        assert rr.lemma_tree.nodes["child_2"].status == NodeStatus.PROVED
+
+    def test_reformulation_on_weak_child(self):
+        """When WEAK_CHILD_LEMMA detected, child is reformulated and parent retried."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="original weak claim",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        diagnosis_json = (
+            '{"failure_type": "weak_child_lemma", '
+            '"description": "child_1 too weak", '
+            '"problematic_child_id": "child_1", '
+            '"suggested_fix": "strengthen"}'
+        )
+        reformulation_json = (
+            '{"reformulated_statement": "stronger claim", '
+            '"reasoning": "need stronger hypothesis"}'
+        )
+        llm = _make_mock_llm([
+            "```lean\n-- MOCK_ERROR\nfailed\n```",
+            diagnosis_json,
+            reformulation_json,
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+            max_retries_per_node=2,
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        result = agent.run(ctx)
+
+        rr = RecursiveProofResult.model_validate(result.result)
+        child_node = rr.lemma_tree.nodes["child_1"]
+        assert child_node.statement_nl == "stronger claim"
+
+
+class TestPipelineWeakChildRetry:
+    """Verify ProofPipeline retries LemmaBreakdown on WEAK_CHILD_LEMMA."""
+
+    def _make_pipeline(self, mock_llm):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        repl = _make_mock_repl()
+        search = _make_mock_search()
+        return ProofPipeline(
+            llm_client=mock_llm,
+            lean_repl=repl,
+            lean_search=search,
+            use_proof_critic=False,
+            use_proof_detailer=False,
+        )
+
+    def test_extract_weak_child_feedback(self):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                    status=NodeStatus.FAILED,
+                    failure_diagnosis=FailureDiagnosis(
+                        failure_type=FailureType.WEAK_CHILD_LEMMA,
+                        description="child_1 is too weak",
+                        problematic_child_id="child_1",
+                        suggested_fix="strengthen",
+                    ),
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="weak helper",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        result = RecursiveProofResult(
+            root_statement="theorem parent := sorry",
+            proved=False,
+            lemma_tree=tree,
+            failure_reason="Not all nodes proved",
+        )
+
+        feedback = ProofPipeline._extract_weak_child_feedback(result)
+        assert len(feedback) == 1
+        assert feedback[0].issue_type == CritiqueIssueType.WEAK_CHILD_LEMMA
+        assert feedback[0].node_id == "child_1"
+        assert "too weak" in feedback[0].description
+
+    def test_no_feedback_on_stuck_goal(self):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    status=NodeStatus.FAILED,
+                    failure_diagnosis=FailureDiagnosis(
+                        failure_type=FailureType.STUCK_GOAL,
+                        description="stuck",
+                    ),
+                ),
+            },
+            topological_order=["root"],
+        )
+
+        result = RecursiveProofResult(
+            root_statement="theorem parent := sorry",
+            proved=False,
+            lemma_tree=tree,
+            failure_reason="Not all nodes proved",
+        )
+
+        feedback = ProofPipeline._extract_weak_child_feedback(result)
+        assert len(feedback) == 0
+
+    def test_pipeline_retries_on_weak_child(self):
+        from unittest.mock import patch
+
+        tree_v1 = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="weak helper",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        tree_v2 = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1_v2"],
+                ),
+                "child_1_v2": ProofNode(
+                    node_id="child_1_v2",
+                    statement_nl="stronger helper",
+                    statement_lean="theorem child_1_v2 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1_v2", "root"],
+        )
+
+        failed_tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1"],
+                    status=NodeStatus.FAILED,
+                    failure_diagnosis=FailureDiagnosis(
+                        failure_type=FailureType.WEAK_CHILD_LEMMA,
+                        description="child_1 too weak",
+                        problematic_child_id="child_1",
+                        suggested_fix="strengthen",
+                    ),
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="weak",
+                    statement_lean="theorem child_1 := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([])
+        pipeline = self._make_pipeline(llm)
+
+        breakdown_calls = []
+
+        def tracking_breakdown(*args, critic_feedback=None, **kwargs):
+            breakdown_calls.append(critic_feedback)
+            if critic_feedback:
+                return tree_v2
+            return tree_v1
+
+        recursive_call_count = [0]
+
+        def mock_recursive(tree):
+            recursive_call_count[0] += 1
+            if recursive_call_count[0] == 1:
+                return RecursiveProofResult(
+                    root_statement="theorem main := sorry",
+                    proved=False,
+                    lemma_tree=failed_tree,
+                    failure_reason="Not all nodes proved",
+                )
+            return RecursiveProofResult(
+                root_statement="theorem main := sorry",
+                proved=True,
+                total_nodes=2,
+                proved_nodes=2,
+                lemma_tree=tree_v2,
+            )
+
+        with (
+            patch.object(pipeline, "_run_lemma_breakdown", side_effect=tracking_breakdown),
+            patch.object(pipeline, "_run_proof_search") as mock_search,
+            patch.object(pipeline, "_run_lemma_leanifier", side_effect=lambda t: t),
+            patch.object(pipeline, "_run_recursive_prover", side_effect=mock_recursive),
+            patch.object(pipeline, "_run_flatten_finalize", return_value="proof code"),
+        ):
+            mock_search.return_value = ProofSearchResult(
+                statement="theorem main := sorry",
+                needs_decomposition=True,
+            )
+
+            result = pipeline.run("theorem main := sorry", "main theorem")
+
+        assert result.proved
+        assert len(breakdown_calls) >= 2
+        assert breakdown_calls[0] is None
+        assert breakdown_calls[1] is not None
+        assert breakdown_calls[1][0].issue_type == CritiqueIssueType.WEAK_CHILD_LEMMA

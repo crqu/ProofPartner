@@ -421,8 +421,8 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
     default="builtin",
     help="Proof backend to use (default: builtin)",
 )
-@click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
-@click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
+@click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
+@click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
 @click.pass_context
 def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool) -> None:
     """Attempt to prove a Lean 4 statement.
@@ -537,8 +537,8 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 @click.option("--budget", type=float, default=20.00, callback=_validate_positive, help="Budget in USD (default: $20.00)")
 @click.option("--max-conjectures", type=int, default=5, callback=_validate_positive, help="Max conjectures to evaluate (default: 5)")
 @click.option("--max-refinements", type=int, default=3, callback=_validate_non_negative, help="Max refinement attempts per conjecture (default: 3)")
-@click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
-@click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
+@click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
+@click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
 @click.pass_context
 def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int, use_critic: bool, use_detailer: bool) -> None:
     """Run the full explore-conjecture-prove research loop.
@@ -643,8 +643,8 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
 @click.argument("session_id", required=False, default=None)
 @click.option("--list", "list_sessions", is_flag=True, help="List available sessions with their stages")
 @click.option("--budget", type=float, default=20.00, help="Budget in USD (default: $20.00)")
-@click.option("--use-critic/--no-critic", default=False, help="Enable ProofCritic for lemma decomposition review")
-@click.option("--use-detailer/--no-detailer", default=False, help="Enable ProofDetailer for proof sketch enrichment")
+@click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
+@click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
 @click.pass_context
 def resume_cmd(
     ctx: click.Context,

@@ -175,7 +175,7 @@ class TestRunEvalMockPipelineEndToEnd:
 
         repo_dir = tmp_path / "miniF2F"
         (repo_dir / ".git").mkdir(parents=True)
-        lean_dir = repo_dir / "lean4" / "MiniF2F" / "Test"
+        lean_dir = repo_dir / "MiniF2F" / "Test"
         lean_dir.mkdir(parents=True)
         lean_file = lean_dir / "Basic.lean"
         lean_file.write_text(

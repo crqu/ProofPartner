@@ -17,8 +17,8 @@ from agentic_research.models.eval import (
 
 log = get_logger(__name__)
 
-MINIF2F_REPO = "https://github.com/openai/miniF2F.git"
-MINIF2F_LEAN4_DIR = "lean4/MiniF2F"
+MINIF2F_REPO = "https://github.com/google-deepmind/miniF2F.git"
+MINIF2F_LEAN4_DIR = "MiniF2F"
 PUTNAM_BENCH_REPO = "https://github.com/trishullab/PutnamBench.git"
 PUTNAM_LEAN4_DIR = "lean4/src"
 

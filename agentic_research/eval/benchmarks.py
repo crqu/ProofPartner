@@ -112,7 +112,8 @@ def _extract_statement(full_text: str) -> str:
 
     Handles := by, := sorry, :=\nsorry (PutnamBench), and where clauses.
     """
-    normalized = re.sub(r":=\s+", ":= ", full_text)
+    text = re.sub(r'answer\s*\(([^)]+)\)', r'(\1)', full_text)
+    normalized = re.sub(r":=\s+", ":= ", text)
 
     for marker in [":= by", ":= sorry", ":=by"]:
         idx = normalized.find(marker)

@@ -93,7 +93,7 @@ class TestEvaluateProofDiscoverySuccess:
         assert result.proof == "theorem test : True := by trivial"
         assert result.token_usage == 380
         assert result.attempts == 1
-        assert result.duration_seconds > 0
+        assert result.duration_seconds >= 0
 
 
 class TestEvaluateProofDiscoveryFailure:

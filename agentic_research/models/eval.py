@@ -129,6 +129,7 @@ class ScoreReport(BaseModel):
     results: list[ProblemResult] = Field(default_factory=list)
     aggregate: AggregateStats = Field(default_factory=AggregateStats)
     conjecture_scores: list[ConjectureScore] | None = None
+    by_difficulty: dict[str, AggregateStats] | None = None
 
 
 class EvalConfig(BaseModel):
@@ -142,3 +143,4 @@ class EvalConfig(BaseModel):
     sample_size: int | None = Field(default=None, description="Subset of problems to evaluate")
     seed: int = Field(default=0, description="Random seed for sampling")
     data_dir: Path = Field(default=Path("data/benchmarks"), description="Where to store benchmark data")
+    model: str | None = Field(default=None, description="LLM model for proof attempts")

@@ -41,6 +41,52 @@ def test_extract_statement_term_proof():
     assert stmt == "theorem foo : True := sorry"
 
 
+def test_extract_statement_newline_sorry():
+    stmt = _extract_statement("theorem foo (n : Nat) : n = n :=\nsorry")
+    assert stmt == "theorem foo (n : Nat) : n = n := by sorry"
+
+
+def test_extract_statement_newline_indent_sorry():
+    stmt = _extract_statement("theorem foo (n : Nat) : n = n :=\n  sorry")
+    assert stmt == "theorem foo (n : Nat) : n = n := by sorry"
+
+
+def test_parse_lean4_file_solution_defs(tmp_path: Path):
+    lean_file = tmp_path / "putnam_2012_a5.lean"
+    lean_file.write_text(textwrap.dedent("""\
+        import Mathlib
+        open MeasureTheory
+
+        abbrev putnam_2012_a5_solution : Set (ℕ × ℕ) := sorry
+
+        theorem putnam_2012_a5 (n p : ℕ) : (n, p) ∈ putnam_2012_a5_solution ↔ True :=
+        sorry
+    """))
+
+    problems = _parse_lean4_file(lean_file, BenchmarkSource.PUTNAM_BENCH)
+    assert len(problems) == 1
+    assert problems[0].name == "putnam_2012_a5"
+    assert "abbrev putnam_2012_a5_solution" in problems[0].lean_statement
+    assert "theorem putnam_2012_a5" in problems[0].lean_statement
+
+
+def test_parse_lean4_file_noncomputable_solution(tmp_path: Path):
+    lean_file = tmp_path / "putnam_2000_b1.lean"
+    lean_file.write_text(textwrap.dedent("""\
+        import Mathlib
+
+        noncomputable def putnam_2000_b1_solution : ℕ := sorry
+
+        theorem putnam_2000_b1 (n : ℕ) : n = putnam_2000_b1_solution :=
+        sorry
+    """))
+
+    problems = _parse_lean4_file(lean_file, BenchmarkSource.PUTNAM_BENCH)
+    assert len(problems) == 1
+    assert "noncomputable def putnam_2000_b1_solution" in problems[0].lean_statement
+    assert "theorem putnam_2000_b1" in problems[0].lean_statement
+
+
 def test_parse_lean4_file(tmp_path: Path):
     lean_file = tmp_path / "Test.lean"
     lean_file.write_text(textwrap.dedent("""\

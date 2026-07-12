@@ -17,8 +17,8 @@ from agentic_research.models.eval import (
 
 log = get_logger(__name__)
 
-MINIF2F_REPO = "https://github.com/openai/miniF2F.git"
-MINIF2F_LEAN4_DIR = "lean4/MiniF2F"
+MINIF2F_REPO = "https://github.com/google-deepmind/miniF2F.git"
+MINIF2F_LEAN4_DIR = "MiniF2F"
 PUTNAM_BENCH_REPO = "https://github.com/trishullab/PutnamBench.git"
 PUTNAM_LEAN4_DIR = "lean4/src"
 
@@ -64,6 +64,17 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
 
     header = "\n".join(header_lines)
 
+    solution_defs: dict[str, str] = {}
+    solution_pattern = re.compile(
+        r"^((?:noncomputable\s+)?(?:abbrev|def)\s+(putnam_\w+_solution\b).+?:=\s*sorry)",
+        re.MULTILINE | re.DOTALL,
+    )
+    for sol_match in solution_pattern.finditer(content):
+        sol_block = sol_match.group(1).strip()
+        sol_name = sol_match.group(2)
+        problem_stem = sol_name.replace("_solution", "")
+        solution_defs[problem_stem] = sol_block
+
     for match in theorem_pattern.finditer(content):
         keyword = match.group(1)
         name = match.group(2)
@@ -72,6 +83,10 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
         full_text = f"{keyword} {name}{rest}".strip()
 
         statement = _extract_statement(full_text)
+
+        sol_def = solution_defs.get(name)
+        if sol_def:
+            statement = f"{sol_def}\n\n{statement}"
 
         split = _infer_split(str(path))
         difficulty = _infer_difficulty(name)
@@ -95,18 +110,21 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
 def _extract_statement(full_text: str) -> str:
     """Extract the theorem statement without the proof body.
 
-    Handles := by, := sorry, and where clauses.
+    Handles := by, := sorry, :=\nsorry (PutnamBench), and where clauses.
     """
+    text = re.sub(r'answer\s*\(([^)]+)\)', r'(\1)', full_text)
+    normalized = re.sub(r":=\s+", ":= ", text)
+
     for marker in [":= by", ":= sorry", ":=by"]:
-        idx = full_text.find(marker)
+        idx = normalized.find(marker)
         if idx != -1:
-            return full_text[:idx].strip() + " := by sorry"
+            return normalized[:idx].strip() + " := by sorry"
 
-    if ":= " in full_text:
-        idx = full_text.find(":= ")
-        return full_text[:idx].strip() + " := sorry"
+    if ":= " in normalized:
+        idx = normalized.find(":= ")
+        return normalized[:idx].strip() + " := sorry"
 
-    return full_text.rstrip().rstrip(":").strip() + " := by sorry"
+    return normalized.rstrip().rstrip(":").strip() + " := by sorry"
 
 
 def _clone_repo(repo_url: str, target_dir: Path) -> None:

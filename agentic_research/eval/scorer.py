@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 
 from agentic_research.logging import get_logger
 from agentic_research.models.eval import (
     AggregateStats,
     ConjectureScore,
     EvalMode,
+    Problem,
     ProblemResult,
     ProblemSplit,
     ProofResult,
@@ -100,15 +102,38 @@ def compute_conjecture_aggregate(scores: list[ConjectureScore]) -> dict[str, flo
     }
 
 
+def compute_difficulty_breakdown(
+    results: list[ProblemResult],
+    problems: list[Problem],
+) -> dict[str, AggregateStats]:
+    """Group results by problem difficulty and compute per-group stats."""
+    difficulty_lookup = {p.id: p.difficulty.value for p in problems}
+
+    grouped: dict[str, list[ProblemResult]] = defaultdict(list)
+    for r in results:
+        difficulty = difficulty_lookup.get(r.problem_id, "unknown")
+        grouped[difficulty].append(r)
+
+    return {
+        difficulty: compute_aggregate_stats(group_results)
+        for difficulty, group_results in sorted(grouped.items())
+    }
+
+
 def score_eval_run(
     results: list[ProblemResult],
     mode: EvalMode,
     benchmark: str,
     split: ProblemSplit | None = None,
     conjecture_scores: list[ConjectureScore] | None = None,
+    problems: list[Problem] | None = None,
 ) -> ScoreReport:
     """Build a complete score report for an evaluation run."""
     aggregate = compute_aggregate_stats(results)
+
+    by_difficulty: dict[str, AggregateStats] | None = None
+    if problems is not None:
+        by_difficulty = compute_difficulty_breakdown(results, problems)
 
     report = ScoreReport(
         mode=mode,
@@ -117,6 +142,7 @@ def score_eval_run(
         results=results,
         aggregate=aggregate,
         conjecture_scores=conjecture_scores,
+        by_difficulty=by_difficulty,
     )
 
     log.info(

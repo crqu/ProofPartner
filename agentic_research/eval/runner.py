@@ -93,13 +93,19 @@ def _evaluate_proof_discovery(
         lean_search=shared.lean_search,
     )
 
+    full_statement = (
+        f"{problem.lean_header}\n\n{problem.lean_statement}"
+        if problem.lean_header
+        else problem.lean_statement
+    )
+
     result_holder: list[ProofPipelineResult] = []
     error_holder: list[Exception] = []
 
     def _run_pipeline() -> None:
         try:
             r = pipeline.run(
-                lean_statement=problem.lean_statement,
+                lean_statement=full_statement,
                 statement_nl=problem.natural_language,
             )
             result_holder.append(r)

@@ -152,6 +152,63 @@ class TestEvaluateProofDiscoveryError:
         assert "API connection failed" in (result.error_message or "")
 
 
+class TestHeaderPrepending:
+    @patch("agentic_research.eval.runner.ProofPipeline")
+    @patch("agentic_research.eval.runner.LeanRepl")
+    def test_header_prepended_to_statement(self, mock_repl_cls, mock_pipeline_cls):
+        pipeline_result = ProofPipelineResult(
+            statement="test",
+            proved=True,
+            final_proof="proof",
+            total_token_usage=TokenUsage(),
+        )
+        mock_pipeline = MagicMock()
+        mock_pipeline.run.return_value = pipeline_result
+        mock_pipeline_cls.return_value = mock_pipeline
+
+        problem = Problem(
+            id="test",
+            name="test",
+            source=BenchmarkSource.PUTNAM_BENCH,
+            split=ProblemSplit.TEST,
+            difficulty=ProblemDifficulty.PUTNAM,
+            lean_header="import Mathlib\nopen MeasureTheory",
+            lean_statement="theorem test : True := by sorry",
+        )
+        config = _make_config()
+        shared = _make_shared()
+
+        _evaluate_proof_discovery(problem, config, shared)
+
+        call_args = mock_pipeline.run.call_args
+        passed_statement = call_args.kwargs.get("lean_statement", call_args.args[0] if call_args.args else "")
+        assert "import Mathlib" in passed_statement
+        assert "theorem test" in passed_statement
+
+    @patch("agentic_research.eval.runner.ProofPipeline")
+    @patch("agentic_research.eval.runner.LeanRepl")
+    def test_no_header_no_prepend(self, mock_repl_cls, mock_pipeline_cls):
+        pipeline_result = ProofPipelineResult(
+            statement="test",
+            proved=True,
+            final_proof="proof",
+            total_token_usage=TokenUsage(),
+        )
+        mock_pipeline = MagicMock()
+        mock_pipeline.run.return_value = pipeline_result
+        mock_pipeline_cls.return_value = mock_pipeline
+
+        problem = _make_problem()
+        config = _make_config()
+        shared = _make_shared()
+
+        _evaluate_proof_discovery(problem, config, shared)
+
+        call_args = mock_pipeline.run.call_args
+        passed_statement = call_args.kwargs.get("lean_statement", call_args.args[0] if call_args.args else "")
+        assert passed_statement == "theorem test : True := by trivial"
+
+
 class TestModelConfigPassthrough:
     def test_model_field_in_config(self):
         config = EvalConfig(

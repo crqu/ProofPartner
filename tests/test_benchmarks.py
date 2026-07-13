@@ -87,6 +87,57 @@ def test_parse_lean4_file_noncomputable_solution(tmp_path: Path):
     assert "theorem putnam_2000_b1" in problems[0].lean_statement
 
 
+def test_parse_lean4_file_comment_answer_substitution(tmp_path: Path):
+    """Factored problem with comment answer: sorry is replaced with the parsed answer."""
+    lean_file = tmp_path / "putnam_1987_b4.lean"
+    lean_file.write_text(textwrap.dedent("""\
+        import Mathlib
+
+        noncomputable abbrev putnam_1987_b4_solution : Prop × ℝ × Prop × ℝ := sorry
+        -- (True, -1, True, 0)
+
+        theorem putnam_1987_b4 (x : ℝ) : x = putnam_1987_b4_solution.1 :=
+        sorry
+    """))
+
+    problems = _parse_lean4_file(lean_file, BenchmarkSource.PUTNAM_BENCH)
+    assert len(problems) == 1
+    assert "(True, -1, True, 0)" in problems[0].lean_statement
+    assert ":= sorry" not in problems[0].lean_statement.split("\n")[0]
+
+
+def test_parse_lean4_file_non_factored_no_substitution(tmp_path: Path):
+    """Non-factored problem (no _solution def): no substitution occurs."""
+    lean_file = tmp_path / "putnam_2000_a1.lean"
+    lean_file.write_text(textwrap.dedent("""\
+        import Mathlib
+
+        theorem putnam_2000_a1 (n : ℕ) : n = n :=
+        sorry
+    """))
+
+    problems = _parse_lean4_file(lean_file, BenchmarkSource.PUTNAM_BENCH)
+    assert len(problems) == 1
+    assert "_solution" not in problems[0].lean_statement
+
+
+def test_parse_lean4_file_factored_without_comment(tmp_path: Path):
+    """Factored problem without comment answer: sorry is preserved."""
+    lean_file = tmp_path / "putnam_2010_a3.lean"
+    lean_file.write_text(textwrap.dedent("""\
+        import Mathlib
+
+        abbrev putnam_2010_a3_solution : ℕ := sorry
+
+        theorem putnam_2010_a3 (n : ℕ) : n = putnam_2010_a3_solution :=
+        sorry
+    """))
+
+    problems = _parse_lean4_file(lean_file, BenchmarkSource.PUTNAM_BENCH)
+    assert len(problems) == 1
+    assert ":= sorry" in problems[0].lean_statement.split("\n")[0]
+
+
 def test_parse_lean4_file(tmp_path: Path):
     lean_file = tmp_path / "Test.lean"
     lean_file.write_text(textwrap.dedent("""\

@@ -75,6 +75,13 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
         problem_stem = sol_name.replace("_solution", "")
         solution_defs[problem_stem] = sol_block
 
+    solution_answers: dict[str, str] = {}
+    comment_answer_pattern = re.compile(
+        r"(?:abbrev|def)\s+(\w+_solution)\b.*?:=[^\n]*sorry\s*\n\s*--\s*(.+)",
+    )
+    for ca_match in comment_answer_pattern.finditer(content):
+        solution_answers[ca_match.group(1)] = ca_match.group(2).strip()
+
     for match in theorem_pattern.finditer(content):
         keyword = match.group(1)
         name = match.group(2)
@@ -86,6 +93,10 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
 
         sol_def = solution_defs.get(name)
         if sol_def:
+            sol_name = name + "_solution"
+            answer = solution_answers.get(sol_name)
+            if answer:
+                sol_def = sol_def.replace(":= sorry", f":= {answer}", 1)
             statement = f"{sol_def}\n\n{statement}"
 
         split = _infer_split(str(path))

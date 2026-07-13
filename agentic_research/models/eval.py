@@ -139,8 +139,12 @@ class EvalConfig(BaseModel):
     benchmark: BenchmarkSource = BenchmarkSource.MINIF2F
     split: ProblemSplit = ProblemSplit.VALIDATION
     pass_k: int = Field(default=1, ge=1, description="Number of attempts per problem (pass@k)")
-    timeout_seconds: int = Field(default=600, description="Timeout per problem")
+    timeout_seconds: int = Field(default=1800, description="Timeout per problem")
     sample_size: int | None = Field(default=None, description="Subset of problems to evaluate")
     seed: int = Field(default=0, description="Random seed for sampling")
     data_dir: Path = Field(default=Path("data/benchmarks"), description="Where to store benchmark data")
     model: str | None = Field(default=None, description="LLM model for proof attempts")
+    use_extended_thinking: bool = Field(default=True, description="Enable extended thinking for proof search")
+    thinking_budget: int = Field(default=10000, description="Token budget for extended thinking")
+    max_critic_retries: int = Field(default=3, description="Max proof critic retry rounds")
+    use_intent_judge: bool = Field(default=True, description="Enable intent judge for type formalization")

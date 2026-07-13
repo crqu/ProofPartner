@@ -15,7 +15,7 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.eval.benchmarks import load_minif2f, load_putnam_bench
 from agentic_research.eval.scorer import score_eval_run
 from agentic_research.logging import configure_logging, get_logger
-from agentic_research.models.agents import TokenUsage
+from agentic_research.models.agents import ProverConfig, TokenUsage
 from agentic_research.models.eval import (
     BenchmarkSource,
     EvalConfig,
@@ -87,10 +87,14 @@ def _evaluate_proof_discovery(
     start = time.monotonic()
 
     lean_repl = LeanRepl(ReplConfig(backend=detect_backend()))
+    prover_config = ProverConfig(use_extended_thinking=config.use_extended_thinking)
     pipeline = ProofPipeline(
         llm_client=shared.llm_client,
         lean_repl=lean_repl,
         lean_search=shared.lean_search,
+        prover_config=prover_config,
+        max_critic_retries=config.max_critic_retries,
+        use_intent_judge=config.use_intent_judge,
     )
 
     full_statement = (
@@ -306,6 +310,10 @@ def main() -> None:
     @click.option("--json-logs/--console-logs", default=True, help="Log format")
     @click.option("--output", type=click.Path(), default=None, help="Write JSON report to file")
     @click.option("--model", default=None, help="LLM model for proof attempts")
+    @click.option("--extended-thinking/--no-extended-thinking", default=True, help="Enable extended thinking for proof search")
+    @click.option("--thinking-budget", type=int, default=10000, help="Token budget for extended thinking")
+    @click.option("--max-critic-retries", type=int, default=3, help="Max proof critic retry rounds")
+    @click.option("--use-intent-judge/--no-use-intent-judge", default=True, help="Enable intent judge for type formalization")
     def run(
         mode: str,
         benchmark: str,
@@ -317,6 +325,10 @@ def main() -> None:
         json_logs: bool,
         output: str | None,
         model: str | None,
+        extended_thinking: bool,
+        thinking_budget: int,
+        max_critic_retries: int,
+        use_intent_judge: bool,
     ) -> None:
         """Run the evaluation harness."""
         configure_logging(json_output=json_logs)
@@ -330,6 +342,10 @@ def main() -> None:
             seed=seed,
             data_dir=Path(data_dir),
             model=model,
+            use_extended_thinking=extended_thinking,
+            thinking_budget=thinking_budget,
+            max_critic_retries=max_critic_retries,
+            use_intent_judge=use_intent_judge,
         )
 
         report = run_eval(config)

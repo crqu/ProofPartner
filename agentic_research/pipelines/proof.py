@@ -311,7 +311,7 @@ class ProofPipeline:
             self._verify_axiom_nodes(tree, statement_nl)
 
         self._notify_progress("Recursive Prover", "Proving lemmas recursively")
-        recursive_result = self._run_recursive_prover(tree, nl_proof_context=nl_sketch)
+        recursive_result = self._run_recursive_prover(tree)
 
         if not recursive_result.proved or not recursive_result.lemma_tree:
             weak_feedback = self._extract_weak_child_feedback(recursive_result)
@@ -627,11 +627,7 @@ class ProofPipeline:
             return LemmaTree.model_validate(result.result)
         return None
 
-    def _run_recursive_prover(
-        self,
-        tree: LemmaTree,
-        nl_proof_context: NLProofSketch | None = None,
-    ) -> RecursiveProofResult:
+    def _run_recursive_prover(self, tree: LemmaTree) -> RecursiveProofResult:
         agent = RecursiveProver(
             llm_client=self._llm,
             lean_repl=self._repl,
@@ -640,12 +636,9 @@ class ProofPipeline:
             max_retries_per_node=self._max_retries_per_node,
             lean_preamble=self._lean_preamble,
         )
-        metadata: dict = {"lemma_tree": tree.model_dump()}
-        if nl_proof_context:
-            metadata["nl_proof_context"] = nl_proof_context.model_dump()
         ctx = AgentContext(
             task="prove recursively",
-            metadata=metadata,
+            metadata={"lemma_tree": tree.model_dump()},
         )
         result = agent.run(ctx)
         self._accumulate_tokens(agent.cumulative_tokens)

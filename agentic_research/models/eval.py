@@ -81,6 +81,11 @@ class ProblemResult(BaseModel):
     duration_seconds: float = 0.0
     error_message: str | None = None
     token_usage: int = 0
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 class ConjectureScore(BaseModel):
@@ -118,6 +123,10 @@ class AggregateStats(BaseModel):
     mean_attempts: float = 0.0
     mean_duration_seconds: float = 0.0
     total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    mean_cost_usd: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
 
 
 class ScoreReport(BaseModel):

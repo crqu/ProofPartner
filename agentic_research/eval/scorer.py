@@ -69,6 +69,11 @@ def compute_aggregate_stats(results: list[ProblemResult]) -> AggregateStats:
     mean_duration = sum(r.duration_seconds for r in results) / total
     total_tokens = sum(r.token_usage for r in results)
 
+    total_cost = sum(r.cost_usd for r in results)
+    mean_cost = total_cost / total
+    total_input = sum(r.input_tokens for r in results)
+    total_output = sum(r.output_tokens for r in results)
+
     return AggregateStats(
         total=total,
         successes=successes,
@@ -80,6 +85,10 @@ def compute_aggregate_stats(results: list[ProblemResult]) -> AggregateStats:
         mean_attempts=round(mean_attempts, 2),
         mean_duration_seconds=round(mean_duration, 2),
         total_tokens=total_tokens,
+        total_cost_usd=round(total_cost, 6),
+        mean_cost_usd=round(mean_cost, 6),
+        total_input_tokens=total_input,
+        total_output_tokens=total_output,
     )
 
 
@@ -154,5 +163,23 @@ def score_eval_run(
         wilson_lower=aggregate.wilson_ci.lower if aggregate.wilson_ci else None,
         wilson_upper=aggregate.wilson_ci.upper if aggregate.wilson_ci else None,
     )
+
+    proved_costs = [r.cost_usd for r in results if r.result == ProofResult.SUCCESS]
+    failed_costs = [r.cost_usd for r in results if r.result != ProofResult.SUCCESS]
+    log.info(
+        "eval_cost_summary",
+        total_cost_usd=aggregate.total_cost_usd,
+        mean_cost_usd=aggregate.mean_cost_usd,
+        mean_cost_proved=round(sum(proved_costs) / len(proved_costs), 6) if proved_costs else 0.0,
+        mean_cost_failed=round(sum(failed_costs) / len(failed_costs), 6) if failed_costs else 0.0,
+        total_input_tokens=aggregate.total_input_tokens,
+        total_output_tokens=aggregate.total_output_tokens,
+    )
+
+    if by_difficulty:
+        log.info(
+            "eval_cost_by_difficulty",
+            **{tier: stats.total_cost_usd for tier, stats in by_difficulty.items()},
+        )
 
     return report

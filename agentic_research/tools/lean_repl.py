@@ -333,7 +333,12 @@ class LeanRepl(BaseTool):
         Returns the successful tactic string or None.
         """
         import_block = "\n".join(f"import {imp}" for imp in (imports or []))
-        tactics = ["grind", "simp_all"]
+        tactics = [
+            "grind",
+            "simp_all",
+            "field_simp; ring",
+            "field_simp; nlinarith",
+        ]
 
         for tactic in tactics:
             code = f"{import_block}\n{theorem_statement} by {tactic}".strip()

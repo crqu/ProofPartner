@@ -200,8 +200,7 @@ class RecursiveProver(BaseAgent):
                     failure_type=diagnosis.failure_type.value if diagnosis else "unknown",
                     retry=retry + 1,
                 )
-                node.status = NodeStatus.FAILED
-                return False
+                continue
 
             all_children_proved = True
             for child in tree.get_children(node.node_id):

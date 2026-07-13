@@ -80,7 +80,7 @@ def test_both_fail():
     result = repl.try_automated_tactics(STMT)
 
     assert result is None
-    assert repl._backend.compile.call_count == 2
+    assert repl._backend.compile.call_count == 6
 
 
 def test_timeout_handling():

@@ -619,6 +619,7 @@ class ProofPipeline:
             lean_preamble=self._lean_preamble,
             prebuilt_axioms=self._prebuilt_axioms,
             axiom_keywords=self._axiom_keywords,
+            lean_search=self._search,
         )
         ctx = AgentContext(
             task="leanify lemmas",

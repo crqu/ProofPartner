@@ -1103,6 +1103,35 @@ into a Lean 4 theorem statement with `sorry` as the proof body.
 - Include all necessary imports
 - Use appropriate type annotations
 
+## Mathlib Lean 4 Examples
+
+Example 1 — Using Set.preimage and Finset.sum:
+```lean
+import Mathlib.Order.Filter.Basic
+theorem preimage_mono_example {α β : Type*} (f : α → β)
+    (s t : Set β) (h : s ⊆ t) :
+    f ⁻¹' s ⊆ f ⁻¹' t :=
+  Set.preimage_mono h
+```
+
+Example 2 — Using List.length and basic arithmetic:
+```lean
+import Mathlib.Data.List.Basic
+theorem length_append_example {α : Type*} (l₁ l₂ : List α) :
+    (l₁ ++ l₂).length = l₁.length + l₂.length :=
+  List.length_append l₁ l₂
+```
+
+Example 3 — Using integral monotonicity:
+```lean
+import Mathlib.MeasureTheory.Integral.Bochner
+open MeasureTheory
+theorem integral_nonneg_example {α : Type*} [MeasurableSpace α]
+    {μ : Measure α} {f : α → ℝ} (hf : 0 ≤ᵐ[μ] f) :
+    0 ≤ ∫ x, f x ∂μ :=
+  integral_nonneg_of_ae hf
+```
+
 ## Output Format
 Return ONLY the Lean 4 code inside a ```lean code block.
 """

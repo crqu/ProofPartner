@@ -274,6 +274,8 @@ class ProofPipeline:
                     tree = self._run_lemma_breakdown(
                         lean_statement, statement_nl, search_result,
                         critic_feedback=critic_issues,
+                        nl_proof_context=nl_sketch,
+                        tactic_hints=tactic_hints,
                     )
                     if tree is None:
                         break
@@ -327,6 +329,8 @@ class ProofPipeline:
                 retried = self._retry_on_weak_children(
                     lean_statement, statement_nl, search_result,
                     weak_feedback, pipeline_start,
+                    nl_proof_context=nl_sketch,
+                    tactic_hints=tactic_hints,
                 )
                 if retried is not None:
                     return retried
@@ -644,6 +648,18 @@ class ProofPipeline:
         return None
 
     def _run_recursive_prover(self, tree: LemmaTree) -> RecursiveProofResult:
+        leanifier = LemmaLeanifier(
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            lean_preamble=self._lean_preamble,
+            prebuilt_axioms=self._prebuilt_axioms,
+            axiom_keywords=self._axiom_keywords,
+            lean_search=self._search,
+        )
+        nl_prover = self._nl_prover if self._use_nl_proof_stage else None
+        detailer = ProofDetailer(llm_client=self._llm) if nl_prover else None
+        breakdown_agent = LemmaBreakdown(llm_client=self._llm)
+        corrector = ProofCorrector(llm_client=self._llm)
         agent = RecursiveProver(
             llm_client=self._llm,
             lean_repl=self._repl,
@@ -651,6 +667,11 @@ class ProofPipeline:
             max_depth=self._max_depth,
             max_retries_per_node=self._max_retries_per_node,
             lean_preamble=self._lean_preamble,
+            leanifier=leanifier,
+            nl_prover=nl_prover,
+            proof_detailer=detailer,
+            breakdown=breakdown_agent,
+            proof_corrector=corrector,
         )
         ctx = AgentContext(
             task="prove recursively",
@@ -698,6 +719,8 @@ class ProofPipeline:
         search_result: ProofSearchResult,
         weak_feedback: list[CritiqueIssue],
         pipeline_start: float,
+        nl_proof_context: NLProofSketch | None = None,
+        tactic_hints: str = "",
     ) -> ProofPipelineResult | None:
         """Retry lemma breakdown when WEAK_CHILD_LEMMA is detected."""
         for attempt in range(self._MAX_WEAK_CHILD_RETRIES):
@@ -714,6 +737,8 @@ class ProofPipeline:
             tree = self._run_lemma_breakdown(
                 lean_statement, statement_nl, search_result,
                 critic_feedback=weak_feedback,
+                nl_proof_context=nl_proof_context,
+                tactic_hints=tactic_hints,
             )
             if tree is None:
                 return None

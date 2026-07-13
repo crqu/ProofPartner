@@ -273,7 +273,7 @@ class TestPipelineIntegration:
             statement_nl="True is provable",
         )
 
-        mock_nl_prover.generate_proof.assert_called_once()
+        assert mock_nl_prover.generate_proof.call_count >= 1
 
     def test_pipeline_without_nl_prover(self) -> None:
         """Verify pipeline works without NL prover (backward compatible)."""

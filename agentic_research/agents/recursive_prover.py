@@ -9,6 +9,7 @@ Key innovation from the paper:
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
@@ -30,6 +31,7 @@ from agentic_research.models.agents import (
     TokenUsage,
 )
 from agentic_research.models.proof import (
+    ErrorCategory,
     FailureDiagnosis,
     FailureType,
     LemmaTree,
@@ -39,6 +41,13 @@ from agentic_research.models.proof import (
 )
 from agentic_research.models.tools import CompilationStatus
 from agentic_research.tools.lean_repl import LeanRepl
+
+if TYPE_CHECKING:
+    from agentic_research.agents.lemma_breakdown import LemmaBreakdown
+    from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+    from agentic_research.agents.nl_prover import NaturalLanguageProver
+    from agentic_research.agents.proof_corrector import ProofCorrector
+    from agentic_research.agents.proof_detailer import ProofDetailer
 
 log = get_logger(__name__)
 
@@ -56,6 +65,8 @@ def _extract_lean_code(text: str) -> str:
 class RecursiveProver(BaseAgent):
     """Proves a lemma tree using parent-before-children strategy."""
 
+    _MAX_TOTAL_NODES = 50
+
     def __init__(
         self,
         llm_client: LLMClient,
@@ -65,6 +76,11 @@ class RecursiveProver(BaseAgent):
         max_depth: int = DEFAULT_MAX_DEPTH,
         max_retries_per_node: int = DEFAULT_MAX_RETRIES_PER_NODE,
         lean_preamble: str | None = None,
+        leanifier: LemmaLeanifier | None = None,
+        nl_prover: NaturalLanguageProver | None = None,
+        proof_detailer: ProofDetailer | None = None,
+        breakdown: LemmaBreakdown | None = None,
+        proof_corrector: ProofCorrector | None = None,
     ) -> None:
         super().__init__(name="recursive_prover", max_retries=1)
         self._llm = llm_client
@@ -73,6 +89,12 @@ class RecursiveProver(BaseAgent):
         self._max_depth = max_depth
         self._max_retries_per_node = max_retries_per_node
         self._lean_preamble = lean_preamble
+        self._leanifier = leanifier
+        self._nl_prover = nl_prover
+        self._proof_detailer = proof_detailer
+        self._breakdown = breakdown
+        self._proof_corrector = proof_corrector
+        self._total_nodes = 0
 
     def _execute(self, context: AgentContext) -> AgentResult:
         tree_data = context.metadata.get("lemma_tree")
@@ -85,6 +107,7 @@ class RecursiveProver(BaseAgent):
 
         tree = LemmaTree.model_validate(tree_data)
         total_tokens = TokenUsage()
+        self._total_nodes = len(tree.nodes)
 
         self._prove_node(tree, tree.root_id, total_tokens)
 
@@ -160,15 +183,67 @@ class RecursiveProver(BaseAgent):
                 node.proof_code = prover_result.final_proof
                 return True
 
+        # H5: Try ProofCorrector for structured error diagnosis
+        if self._proof_corrector and result.result:
+            prover_result = ProverResult.model_validate(result.result)
+            error_msg = prover_result.failure_reason or "Proof search exhausted"
+            if "timeout" not in error_msg.lower():
+                correction = self._proof_corrector.correct(
+                    failed_proof=prover_result.final_proof or node.statement_lean,
+                    error_message=error_msg,
+                    lean_goal_state=node.statement_lean,
+                )
+                tokens.input_tokens += self._proof_corrector.cumulative_tokens.input_tokens
+                tokens.output_tokens += self._proof_corrector.cumulative_tokens.output_tokens
+
+                if correction.error_category != ErrorCategory.TIMEOUT and correction.suggested_tactics:
+                    correction_hint = (
+                        f"\n\n[Correction context]\n"
+                        f"Error: {correction.error_category.value}\n"
+                        f"Suggested tactics: {', '.join(correction.suggested_tactics)}\n"
+                        f"Revised sketch:\n{correction.revised_proof_sketch}"
+                    )
+                    retry_ctx = AgentContext(
+                        task=node.statement_lean + correction_hint
+                    )
+                    retry_prover = IterativeProver(
+                        llm_client=self._llm,
+                        lean_repl=self._repl,
+                        config=self._prover_config,
+                    )
+                    retry_result = retry_prover.run(retry_ctx)
+                    tokens.input_tokens += retry_result.token_usage.input_tokens
+                    tokens.output_tokens += retry_result.token_usage.output_tokens
+
+                    if retry_result.result:
+                        retry_prover_result = ProverResult.model_validate(retry_result.result)
+                        if retry_prover_result.proved:
+                            node.status = NodeStatus.PROVED
+                            node.proof_code = retry_prover_result.final_proof
+                            log.info("recursive_prover_correction_success", node_id=node.node_id)
+                            return True
+
+                    node.failure_diagnosis = FailureDiagnosis(
+                        failure_type=FailureType.STUCK_GOAL,
+                        description=f"Correction retry failed ({correction.error_category.value})",
+                    )
+
+        # H4: Try recursive decomposition of stuck leaf
+        if self._decompose_stuck_leaf(tree, node, tokens):
+            return self._prove_parent(tree, node, tokens)
+
         node.status = NodeStatus.FAILED
-        node.failure_diagnosis = FailureDiagnosis(
-            failure_type=FailureType.STUCK_GOAL,
-            description="Iterative prover exhausted",
-        )
+        if not node.failure_diagnosis:
+            node.failure_diagnosis = FailureDiagnosis(
+                failure_type=FailureType.STUCK_GOAL,
+                description="Iterative prover exhausted",
+            )
         return False
 
     def _prove_parent(self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage) -> bool:
         """Parent-before-children: prove parent using child sorry-premises, then recurse."""
+        nl_context, _ = self._generate_nl_context(node, tokens)
+
         previous_proof: str | None = None
         previous_errors: str = ""
         for retry in range(self._max_retries_per_node):
@@ -179,6 +254,7 @@ class RecursiveProver(BaseAgent):
                     tree, node, tokens,
                     previous_proof=previous_proof,
                     previous_errors=previous_errors,
+                    nl_context=nl_context,
                 )
             )
 
@@ -260,6 +336,7 @@ class RecursiveProver(BaseAgent):
         tokens: TokenUsage,
         previous_proof: str | None = None,
         previous_errors: str = "",
+        nl_context: str = "",
     ) -> tuple[bool, str, str]:
         """Prove the parent assuming child lemmas are true (sorry).
 
@@ -278,6 +355,9 @@ class RecursiveProver(BaseAgent):
             parent_statement=node.statement_lean,
             child_declarations=child_decls,
         )
+
+        if nl_context:
+            user_content += f"\n\n{nl_context}"
 
         if previous_proof and previous_errors:
             user_content += (
@@ -391,6 +471,179 @@ class RecursiveProver(BaseAgent):
             child.statement_lean = ""
             child.status = NodeStatus.REFORMULATED
             child.proof_code = None
+
+            self._leanify_reformulated_node(tree, child, tokens)
             return True
 
         return False
+
+    def _leanify_reformulated_node(
+        self, tree: LemmaTree, child: ProofNode, tokens: TokenUsage
+    ) -> bool:
+        """Re-leanify a reformulated child so it can participate in parent proofs."""
+        if not self._leanifier:
+            return False
+
+        parent = tree.get_node(child.parent_id) if child.parent_id else None
+        parent_stmt = parent.statement_lean if parent else ""
+        siblings = self._get_sibling_statements(tree, child)
+
+        lean_code, usage = self._leanifier.leanify_single_node(
+            child, parent_stmt, siblings
+        )
+        tokens.input_tokens += usage.input_tokens
+        tokens.output_tokens += usage.output_tokens
+
+        if lean_code:
+            child.statement_lean = lean_code
+            child.status = NodeStatus.PENDING
+            log.info("reformulated_child_releanified", node_id=child.node_id)
+            return True
+
+        log.warning("reformulated_child_leanify_failed", node_id=child.node_id)
+        return False
+
+    def _get_sibling_statements(self, tree: LemmaTree, node: ProofNode) -> str:
+        """Get Lean statements of sibling nodes."""
+        if not node.parent_id:
+            return ""
+        parent = tree.get_node(node.parent_id)
+        if not parent:
+            return ""
+        parts = []
+        for cid in parent.children:
+            if cid == node.node_id:
+                continue
+            sibling = tree.get_node(cid)
+            if sibling and sibling.statement_lean:
+                parts.append(f"-- {cid}\n{sibling.statement_lean}")
+        return "\n\n".join(parts)
+
+    def _generate_nl_context(
+        self, node: ProofNode, tokens: TokenUsage
+    ) -> tuple[str, str]:
+        """Generate NL proof sketch and tactic hints for a node.
+
+        Returns (nl_context_string, tactic_hints). No-ops if nl_prover is None.
+        """
+        if not self._nl_prover:
+            return "", ""
+
+        sketch, gen_tokens = self._nl_prover.generate_proof(
+            statement=node.statement_lean,
+            statement_nl=node.statement_nl or None,
+        )
+        tokens.input_tokens += gen_tokens.input_tokens
+        tokens.output_tokens += gen_tokens.output_tokens
+
+        if not sketch.proof_steps:
+            return "", ""
+
+        tactic_hints = ""
+        if self._proof_detailer:
+            tactic_hints = self._proof_detailer.detail_sketch(sketch)
+            tokens.input_tokens += self._proof_detailer.cumulative_tokens.input_tokens
+            tokens.output_tokens += self._proof_detailer.cumulative_tokens.output_tokens
+
+        nl_context = (
+            f"## NL Proof Context\n"
+            f"Strategy: {sketch.overall_strategy}\n"
+        )
+        for i, step in enumerate(sketch.proof_steps, 1):
+            nl_context += f"Step {i}: {step.claim} — {step.reasoning}\n"
+        if tactic_hints:
+            nl_context += f"\n## Tactic Hints\n{tactic_hints}\n"
+
+        log.info(
+            "recursive_prover_nl_context",
+            node_id=node.node_id,
+            steps=len(sketch.proof_steps),
+        )
+        return nl_context, tactic_hints
+
+    _MAX_DECOMPOSITION_CHILDREN = 5
+
+    def _decompose_stuck_leaf(
+        self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage
+    ) -> bool:
+        """Decompose a stuck leaf into sub-lemmas via breakdown.
+
+        Returns True if decomposition succeeded and the node now has children.
+        """
+        if not self._breakdown:
+            return False
+        if node.depth >= self._max_depth - 1:
+            return False
+        if self._total_nodes >= self._MAX_TOTAL_NODES:
+            log.warning("recursive_prover_node_cap", total=self._total_nodes)
+            return False
+
+        nl_context, tactic_hints = self._generate_nl_context(node, tokens)
+
+        metadata: dict = {"statement_lean": node.statement_lean}
+        if nl_context:
+            metadata["nl_context"] = nl_context
+        if tactic_hints:
+            metadata["tactic_hints"] = tactic_hints
+
+        ctx = AgentContext(
+            task=node.statement_nl or node.statement_lean,
+            metadata=metadata,
+        )
+        result = self._breakdown.run(ctx)
+        tokens.input_tokens += self._breakdown.cumulative_tokens.input_tokens
+        tokens.output_tokens += self._breakdown.cumulative_tokens.output_tokens
+
+        if result.status != AgentStatus.SUCCESS or not result.result:
+            return False
+
+        sub_tree = LemmaTree.model_validate(result.result)
+        child_nodes = [
+            n for nid, n in sub_tree.nodes.items() if nid != sub_tree.root_id
+        ]
+
+        if not child_nodes or len(child_nodes) > self._MAX_DECOMPOSITION_CHILDREN:
+            log.info(
+                "recursive_prover_decomp_skip",
+                node_id=node.node_id,
+                children=len(child_nodes),
+            )
+            return False
+
+        new_children: list[str] = []
+        for child in child_nodes:
+            child_id = f"{node.node_id}_{child.node_id}"
+            new_node = ProofNode(
+                node_id=child_id,
+                statement_nl=child.statement_nl,
+                parent_id=node.node_id,
+                depth=node.depth + 1,
+            )
+
+            if self._leanifier:
+                lean_code, usage = self._leanifier.leanify_single_node(
+                    new_node, node.statement_lean
+                )
+                tokens.input_tokens += usage.input_tokens
+                tokens.output_tokens += usage.output_tokens
+                if lean_code:
+                    new_node.statement_lean = lean_code
+
+            tree.nodes[child_id] = new_node
+            new_children.append(child_id)
+            self._total_nodes += 1
+
+        node.children = new_children
+        node.status = NodeStatus.PENDING
+        node.failure_diagnosis = None
+        node.proof_code = None
+
+        tree.topological_order = new_children + tree.topological_order
+
+        log.info(
+            "recursive_prover_leaf_decomposed",
+            node_id=node.node_id,
+            new_children=len(new_children),
+            total_nodes=self._total_nodes,
+        )
+        return True

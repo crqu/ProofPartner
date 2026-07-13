@@ -139,6 +139,18 @@ class LemmaLeanifier(BaseAgent):
             error_message=f"Failed to leanify: {failed_nodes}" if failed_nodes else None,
         )
 
+    def leanify_single_node(
+        self,
+        node: ProofNode,
+        parent_statement: str,
+        sibling_statements: str = "",
+        tactic_hints: str = "",
+    ) -> tuple[str | None, TokenUsage]:
+        """Translate a single node to Lean 4 — public API for per-node leanification."""
+        return self._leanify_node(
+            node, parent_statement, sibling_statements, tactic_hints=tactic_hints
+        )
+
     _MATCH_THRESHOLD = 2
 
     def _match_prebuilt_axiom(self, node: ProofNode) -> str | None:

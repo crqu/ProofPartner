@@ -20,6 +20,7 @@ from agentic_research.models.agents import (
 )
 from agentic_research.models.proof import (
     ErrorCategory,
+    NodeStatus,
     ProofCorrection,
     ProofSearchResult,
     ProofStrategy,
@@ -842,3 +843,871 @@ class TestTypeFirstFormalization:
             pipeline.run("theorem foo : True", statement_nl="some NL statement")
 
         assert leanifier_preamble_at_call is None
+
+
+# ---------------------------------------------------------------------------
+# H1: Fix B-2 — NL proof context in breakdown retry paths
+# ---------------------------------------------------------------------------
+
+
+class TestH1NLProofContextRetries:
+    """Verify nl_proof_context and tactic_hints are passed in retry paths."""
+
+    def test_critic_retry_passes_nl_context(self):
+        """Critic retry path forwards nl_proof_context and tactic_hints to breakdown."""
+        from unittest.mock import patch, MagicMock
+        from agentic_research.agents.proof_detailer import ProofDetailer
+        from agentic_research.models.proof import (
+            CritiqueIssue, CritiqueIssueType, CritiqueResult, LemmaTree, NLProofSketch,
+            NLProofStep, ProofNode, RecursiveProofResult,
+        )
+
+        sketch = NLProofSketch(
+            proof_steps=[NLProofStep(claim="step1", reasoning="reason")],
+            overall_strategy="direct",
+        )
+
+        detail_response = "Use simp then ring"
+        llm = _make_mock_llm([detail_response])
+
+        mock_nl_prover = MagicMock()
+
+        pipeline = _make_pipeline(
+            llm_client=llm,
+            use_proof_critic=True,
+            max_critic_retries=1,
+            nl_prover=mock_nl_prover,
+            use_nl_proof_stage=True,
+        )
+
+        search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            needs_decomposition=True,
+            failure_reason="needs decomp",
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["root"],
+            nodes={"root": ProofNode(
+                node_id="root",
+                statement_nl="root",
+                statement_lean="theorem root : True := sorry",
+                depth=0,
+            )},
+        )
+
+        failing_critique = CritiqueResult(
+            passed=False,
+            issues=[CritiqueIssue(
+                issue_type=CritiqueIssueType.UNJUSTIFIED_STEP,
+                node_id="root",
+                description="unjustified",
+                severity="blocking",
+            )],
+        )
+        passing_critique = CritiqueResult(passed=True, issues=[])
+
+        failed_prover = RecursiveProofResult(
+            root_statement="theorem root : True := sorry",
+            failure_reason="skip",
+        )
+
+        breakdown_calls: list = []
+
+        def capture_breakdown(*args, **kwargs):
+            breakdown_calls.append(kwargs)
+            return tree
+
+        critique_calls = [failing_critique, passing_critique]
+
+        with patch.object(pipeline._repl, "try_automated_tactics", return_value=None), \
+             patch.object(pipeline, "_run_proof_search", return_value=search_result), \
+             patch.object(pipeline, "_try_proof_correction", return_value=None), \
+             patch.object(pipeline, "_run_type_first_formalization", return_value=None), \
+             patch.object(pipeline, "_run_nl_proof_stage", return_value=sketch), \
+             patch.object(pipeline, "_run_lemma_breakdown", side_effect=capture_breakdown), \
+             patch.object(pipeline, "_run_proof_critic", side_effect=lambda *a: critique_calls.pop(0)), \
+             patch.object(pipeline, "_run_lemma_leanifier", return_value=tree), \
+             patch.object(pipeline, "_run_recursive_prover", return_value=failed_prover), \
+             patch.object(pipeline, "_run_proof_detailer", return_value=tree):
+            pipeline.run("theorem foo : True", statement_nl="NL stmt")
+
+        assert len(breakdown_calls) >= 2
+        retry_kwargs = breakdown_calls[1]
+        assert retry_kwargs.get("nl_proof_context") is not None
+        assert "tactic_hints" in retry_kwargs
+
+    def test_weak_child_retry_passes_nl_context(self):
+        """_retry_on_weak_children forwards nl_proof_context and tactic_hints."""
+        from unittest.mock import patch
+        from agentic_research.models.proof import (
+            NLProofSketch, NLProofStep, LemmaTree, ProofNode,
+            RecursiveProofResult, CritiqueIssue, CritiqueIssueType,
+        )
+
+        pipeline = _make_pipeline(use_proof_critic=False)
+
+        search_result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            needs_decomposition=True,
+        )
+
+        sketch = NLProofSketch(
+            proof_steps=[NLProofStep(claim="c", reasoning="r")],
+            overall_strategy="direct",
+        )
+
+        breakdown_kwargs_captured: list = []
+
+        def capture_breakdown(*args, **kwargs):
+            breakdown_kwargs_captured.append(kwargs)
+            return None
+
+        feedback = [CritiqueIssue(
+            issue_type=CritiqueIssueType.WEAK_CHILD_LEMMA,
+            node_id="child1",
+            description="weak",
+            severity="blocking",
+        )]
+
+        with patch.object(pipeline, "_run_lemma_breakdown", side_effect=capture_breakdown):
+            pipeline._retry_on_weak_children(
+                "theorem foo : True", "NL stmt", search_result,
+                feedback, 0.0,
+                nl_proof_context=sketch,
+                tactic_hints="use omega",
+            )
+
+        assert len(breakdown_kwargs_captured) >= 1
+        kwargs = breakdown_kwargs_captured[0]
+        assert kwargs.get("nl_proof_context") is sketch
+        assert kwargs.get("tactic_hints") == "use omega"
+
+
+# ---------------------------------------------------------------------------
+# H2: Fix B-1 + Gap 3.3 — Re-leanify reformulated children
+# ---------------------------------------------------------------------------
+
+
+class TestH2ReleanifyReformulatedChildren:
+
+    def test_leanify_single_node_delegates(self):
+        """leanify_single_node calls _leanify_node and returns result."""
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+        from agentic_research.models.proof import ProofNode
+
+        lean_response = "```lean\ntheorem sub_1 : True := sorry\n```"
+        llm = _make_mock_llm([lean_response])
+        repl = _make_mock_repl()
+
+        agent = LemmaLeanifier(llm_client=llm, lean_repl=repl)
+        node = ProofNode(
+            node_id="sub-1",
+            statement_nl="some lemma",
+            depth=1,
+        )
+        result, tokens = agent.leanify_single_node(node, "theorem root : True := sorry")
+        assert result is not None
+        assert "sub_1" in result
+
+    def test_reformulated_child_gets_releanified(self):
+        """After reformulation with leanifier, child gets statement_lean set."""
+        from unittest.mock import patch, MagicMock
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode, FailureDiagnosis, FailureType
+
+        llm = _make_mock_llm([
+            '{"reformulated_statement": "new child statement"}',
+        ])
+        repl = _make_mock_repl()
+
+        mock_leanifier = MagicMock()
+        mock_leanifier.leanify_single_node.return_value = (
+            "theorem child_1 : True := sorry",
+            TokenUsage(),
+        )
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            leanifier=mock_leanifier,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["child_1", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="old child",
+                    statement_lean="theorem child_1 : Nat := sorry",
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+
+        diagnosis = FailureDiagnosis(
+            failure_type=FailureType.WEAK_CHILD_LEMMA,
+            problematic_child_id="child_1",
+            description="child too weak",
+        )
+
+        tokens = TokenUsage()
+        result = prover._reformulate_child(tree, tree.nodes["root"], diagnosis, tokens)
+
+        assert result is True
+        child = tree.nodes["child_1"]
+        assert child.statement_nl == "new child statement"
+        assert child.statement_lean == "theorem child_1 : True := sorry"
+        assert child.status == NodeStatus.PENDING
+        mock_leanifier.leanify_single_node.assert_called_once()
+
+    def test_reformulated_child_without_leanifier_stays_empty(self):
+        """Without leanifier, reformulated child has empty statement_lean."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode, FailureDiagnosis, FailureType
+
+        llm = _make_mock_llm([
+            '{"reformulated_statement": "new child statement"}',
+        ])
+        repl = _make_mock_repl()
+
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["child_1", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="old child",
+                    statement_lean="theorem child_1 : Nat := sorry",
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+
+        diagnosis = FailureDiagnosis(
+            failure_type=FailureType.WEAK_CHILD_LEMMA,
+            problematic_child_id="child_1",
+            description="child too weak",
+        )
+
+        tokens = TokenUsage()
+        result = prover._reformulate_child(tree, tree.nodes["root"], diagnosis, tokens)
+
+        assert result is True
+        child = tree.nodes["child_1"]
+        assert child.statement_lean == ""
+        assert child.status == NodeStatus.REFORMULATED
+
+
+# ---------------------------------------------------------------------------
+# H3: Gap 2.1 — NL Prover per-node
+# ---------------------------------------------------------------------------
+
+
+class TestH3NLProverPerNode:
+
+    def test_generate_nl_context_returns_context_when_nl_prover_set(self):
+        """_generate_nl_context returns NL context string when nl_prover is available."""
+        from unittest.mock import MagicMock
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import NLProofSketch, NLProofStep, ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        mock_nl_prover = MagicMock()
+        mock_nl_prover.generate_proof.return_value = (
+            NLProofSketch(
+                proof_steps=[NLProofStep(claim="step1", reasoning="reason1")],
+                overall_strategy="direct",
+            ),
+            TokenUsage(),
+        )
+
+        mock_detailer = MagicMock()
+        mock_detailer.detail_sketch.return_value = "use simp then ring"
+        mock_detailer.cumulative_tokens = TokenUsage()
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            nl_prover=mock_nl_prover,
+            proof_detailer=mock_detailer,
+        )
+
+        node = ProofNode(
+            node_id="test",
+            statement_nl="test statement",
+            statement_lean="theorem test : True := sorry",
+            depth=1,
+        )
+
+        tokens = TokenUsage()
+        nl_context, tactic_hints = prover._generate_nl_context(node, tokens)
+
+        assert "NL Proof Context" in nl_context
+        assert "step1" in nl_context
+        assert "Tactic Hints" in nl_context
+        assert tactic_hints == "use simp then ring"
+        mock_nl_prover.generate_proof.assert_called_once()
+
+    def test_generate_nl_context_noop_without_nl_prover(self):
+        """_generate_nl_context returns empty strings when nl_prover is None."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        node = ProofNode(
+            node_id="test",
+            statement_nl="test",
+            statement_lean="theorem test : True := sorry",
+            depth=1,
+        )
+
+        tokens = TokenUsage()
+        nl_context, tactic_hints = prover._generate_nl_context(node, tokens)
+        assert nl_context == ""
+        assert tactic_hints == ""
+
+    def test_parent_proof_includes_nl_context(self):
+        """_prove_parent_with_children appends NL context to the prompt."""
+        from unittest.mock import patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+
+        response = "```lean\ntheorem root : True := trivial\n```"
+        llm = _make_mock_llm([response])
+        repl = _make_mock_repl()
+
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["child_1", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+
+        tokens = TokenUsage()
+        prover._prove_parent_with_children(
+            tree, tree.nodes["root"], tokens,
+            nl_context="## NL Proof Context\nStrategy: direct",
+        )
+
+        call_args = llm.complete.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "NL Proof Context" in prompt
+
+
+# ---------------------------------------------------------------------------
+# H4: Gap 2.10 — Recursive decomposition of stuck leaves
+# ---------------------------------------------------------------------------
+
+
+class TestH4RecursiveDecomposition:
+
+    def test_stuck_leaf_below_max_depth_decomposes(self):
+        """Stuck leaf at depth < max_depth-1 gets decomposed into children."""
+        from unittest.mock import MagicMock
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        sub_tree = LemmaTree(
+            root_id="sub_root",
+            topological_order=["sub_child", "sub_root"],
+            nodes={
+                "sub_root": ProofNode(
+                    node_id="sub_root",
+                    statement_nl="root",
+                    statement_lean="theorem sub_root : True := sorry",
+                    depth=0,
+                ),
+                "sub_child": ProofNode(
+                    node_id="sub_child",
+                    statement_nl="child lemma",
+                    depth=1,
+                ),
+            },
+        )
+
+        mock_breakdown = MagicMock()
+        from agentic_research.models.agents import AgentResult
+        mock_breakdown.run.return_value = AgentResult(
+            agent_name="lemma_breakdown",
+            status=AgentStatus.SUCCESS,
+            result=sub_tree.model_dump(),
+        )
+        mock_breakdown.cumulative_tokens = TokenUsage()
+
+        mock_leanifier = MagicMock()
+        mock_leanifier.leanify_single_node.return_value = (
+            "theorem leaf_sub_child : True := sorry",
+            TokenUsage(),
+        )
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            max_depth=5,
+            breakdown=mock_breakdown,
+            leanifier=mock_leanifier,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf",
+                    statement_nl="stuck leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        result = prover._decompose_stuck_leaf(tree, tree.nodes["leaf"], tokens)
+
+        assert result is True
+        assert len(tree.nodes["leaf"].children) == 1
+        assert tree.nodes["leaf"].status == NodeStatus.PENDING
+        assert prover._total_nodes == 3
+
+    def test_stuck_leaf_at_max_depth_not_decomposed(self):
+        """Stuck leaf at depth = max_depth-1 is NOT decomposed."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        from unittest.mock import MagicMock
+        mock_breakdown = MagicMock()
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            max_depth=3,
+            breakdown=mock_breakdown,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="deep leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root", depth=2,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        result = prover._decompose_stuck_leaf(tree, tree.nodes["leaf"], tokens)
+        assert result is False
+        mock_breakdown.run.assert_not_called()
+
+    def test_node_cap_prevents_decomposition(self):
+        """Total node cap (50) prevents unbounded tree growth."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        from unittest.mock import MagicMock
+        mock_breakdown = MagicMock()
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            max_depth=10,
+            breakdown=mock_breakdown,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root", depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 50
+
+        tokens = TokenUsage()
+        result = prover._decompose_stuck_leaf(tree, tree.nodes["leaf"], tokens)
+        assert result is False
+
+    def test_too_many_children_skips_decomposition(self):
+        """Decomposition with > 5 children is skipped."""
+        from unittest.mock import MagicMock
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        nodes_dict: dict = {
+            "sub_root": ProofNode(
+                node_id="sub_root", statement_nl="root",
+                statement_lean="theorem sub_root : True := sorry", depth=0,
+            ),
+        }
+        for i in range(6):
+            nodes_dict[f"c{i}"] = ProofNode(
+                node_id=f"c{i}", statement_nl=f"child {i}", depth=1,
+            )
+
+        sub_tree = LemmaTree(
+            root_id="sub_root",
+            topological_order=list(nodes_dict.keys()),
+            nodes=nodes_dict,
+        )
+
+        mock_breakdown = MagicMock()
+        from agentic_research.models.agents import AgentResult
+        mock_breakdown.run.return_value = AgentResult(
+            agent_name="lemma_breakdown",
+            status=AgentStatus.SUCCESS,
+            result=sub_tree.model_dump(),
+        )
+        mock_breakdown.cumulative_tokens = TokenUsage()
+
+        prover = RecursiveProver(
+            llm_client=llm, lean_repl=repl, max_depth=5,
+            breakdown=mock_breakdown,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root", depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        result = prover._decompose_stuck_leaf(tree, tree.nodes["leaf"], tokens)
+        assert result is False
+
+    def test_no_breakdown_agent_returns_false(self):
+        """RecursiveProver without breakdown marks stuck leaves FAILED."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root", depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        result = prover._decompose_stuck_leaf(tree, tree.nodes["leaf"], tokens)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# H5: Gap 4.4 — ProofCorrector in RecursiveProver
+# ---------------------------------------------------------------------------
+
+
+class TestH5ProofCorrectorInRecursiveProver:
+
+    def test_leaf_failure_triggers_corrector(self):
+        """Leaf failure with corrector available invokes correction."""
+        from unittest.mock import MagicMock, patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        from agentic_research.models.agents import AgentResult
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        failed_result = AgentResult(
+            agent_name="iterative_prover",
+            status=AgentStatus.FAILURE,
+            result={"statement": "theorem leaf : True := sorry", "proved": False,
+                    "final_proof": "by simp", "failure_reason": "simp made no progress"},
+            token_usage=TokenUsage(),
+        )
+
+        mock_corrector = MagicMock()
+        mock_corrector.correct.return_value = ProofCorrection(
+            error_category=ErrorCategory.TACTIC_FAILURE,
+            error_message="simp made no progress",
+            suggested_tactics=["omega", "linarith"],
+            revised_proof_sketch="by omega",
+            confidence=0.8,
+            reasoning="use omega",
+        )
+        mock_corrector.cumulative_tokens = TokenUsage()
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            proof_corrector=mock_corrector,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="leaf",
+                    statement_lean="theorem leaf : 1 + 1 = 2 := sorry",
+                    parent_id="root", depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        with patch.object(IterativeProver, "run", return_value=failed_result):
+            prover._prove_leaf(tree, tree.nodes["leaf"], tokens)
+
+        mock_corrector.correct.assert_called_once()
+
+    def test_timeout_errors_skip_correction(self):
+        """TIMEOUT errors skip correction retry."""
+        from unittest.mock import MagicMock, patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        from agentic_research.models.agents import AgentResult
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        failed_result = AgentResult(
+            agent_name="iterative_prover",
+            status=AgentStatus.FAILURE,
+            result={"statement": "theorem leaf : True := sorry", "proved": False,
+                    "final_proof": "by simp", "failure_reason": "deterministic timeout"},
+            token_usage=TokenUsage(),
+        )
+
+        mock_corrector = MagicMock()
+        mock_corrector.cumulative_tokens = TokenUsage()
+
+        prover = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            proof_corrector=mock_corrector,
+        )
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root", depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        with patch.object(IterativeProver, "run", return_value=failed_result):
+            prover._prove_leaf(tree, tree.nodes["leaf"], tokens)
+
+        mock_corrector.correct.assert_not_called()
+
+    def test_no_corrector_behaves_as_before(self):
+        """Without corrector, leaf failure goes straight to decomposition/fail."""
+        from unittest.mock import patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        from agentic_research.models.agents import AgentResult
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+
+        failed_result = AgentResult(
+            agent_name="iterative_prover",
+            status=AgentStatus.FAILURE,
+            result={"statement": "theorem leaf : True := sorry", "proved": False,
+                    "final_proof": "by simp", "failure_reason": "simp made no progress"},
+            token_usage=TokenUsage(),
+        )
+
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["leaf", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root", statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0, children=["leaf"],
+                ),
+                "leaf": ProofNode(
+                    node_id="leaf", statement_nl="leaf",
+                    statement_lean="theorem leaf : True := sorry",
+                    parent_id="root", depth=1,
+                ),
+            },
+        )
+        prover._total_nodes = 2
+
+        tokens = TokenUsage()
+        with patch.object(IterativeProver, "run", return_value=failed_result):
+            result = prover._prove_leaf(tree, tree.nodes["leaf"], tokens)
+
+        assert result is False
+        assert tree.nodes["leaf"].status == NodeStatus.FAILED
+
+
+# ---------------------------------------------------------------------------
+# Pipeline wiring — RecursiveProver receives all new components
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineWiringH2H3H4H5:
+
+    def test_recursive_prover_receives_all_components(self):
+        """_run_recursive_prover passes leanifier, nl_prover, detailer, breakdown, corrector."""
+        from unittest.mock import patch, MagicMock
+        from agentic_research.models.proof import LemmaTree, ProofNode, RecursiveProofResult
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        pipeline = _make_pipeline()
+
+        tree = LemmaTree(
+            root_id="root",
+            topological_order=["root"],
+            nodes={"root": ProofNode(
+                node_id="root", statement_nl="root",
+                statement_lean="theorem root : True := sorry",
+                depth=0,
+            )},
+        )
+
+        captured_kwargs: dict = {}
+
+        original_init = RecursiveProver.__init__
+
+        def capture_init(self_inner, *args, **kwargs):
+            captured_kwargs.update(kwargs)
+            original_init(self_inner, *args, **kwargs)
+
+        with patch.object(RecursiveProver, "__init__", capture_init):
+            try:
+                pipeline._run_recursive_prover(tree)
+            except Exception:
+                pass
+
+        assert "leanifier" in captured_kwargs
+        assert "breakdown" in captured_kwargs
+        assert "proof_corrector" in captured_kwargs
+        assert captured_kwargs["leanifier"] is not None
+        assert captured_kwargs["breakdown"] is not None
+        assert captured_kwargs["proof_corrector"] is not None

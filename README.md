@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-705%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-812%20passed-brightgreen.svg)]()
 
 An agentic mathematical research partner that transforms rough mathematical ideas into formal Lean 4 conjectures and discovers proofs.
 
@@ -64,20 +64,29 @@ The eval harness supports three modes:
 2. **Conjecture quality** — score generated conjectures on formalizability, non-triviality, relevance
 3. **End-to-end research** — given a rough idea, produce a verified Lean proof
 
-Eval harness supports miniF2F and PutnamBench. Baseline results pending.
-
 ```bash
-# Run on miniF2F validation set
-agentic-research eval miniF2F --mode proof_discovery --split valid --pass-k 8
+# Run on miniF2F validation set (30 problems, extended thinking)
+python -m agentic_research.eval.runner --benchmark miniF2F --split valid \
+  --sample-size 30 --seed 42 --extended-thinking
 
-# Sample 32 problems with a fixed seed
-python -m agentic_research.eval.runner --benchmark miniF2F --sample-size 32 --seed 42
+# Run on PutnamBench
+python -m agentic_research.eval.runner --benchmark PutnamBench --split valid \
+  --sample-size 5 --seed 42 --extended-thinking
 ```
 
 **Benchmarks:**
 
-- **miniF2F v2**: 488 problems (244 test + 244 validation) — competition math in Lean 4
-- **PutnamBench**: 672 Putnam competition problems (stub loader)
+- **miniF2F**: 500 problems (256 valid + 244 test) — AMC/AIME/IMO competition math in Lean 4
+- **PutnamBench**: 672 Putnam competition problems in Lean 4
+
+**Results (miniF2F valid, pass@1, Claude Opus 4.6):**
+
+| Sample | Pass Rate | Wilson 95% CI |
+|---|---|---|
+| 5 problems (seed=42) | 5/5 (100%) | [0.57, 1.00] |
+| 30 problems (seed=42) | Pending | — |
+
+*Benchmark run in progress — results will be updated when complete.*
 
 ## Setup
 
@@ -198,18 +207,19 @@ survived  disproved → Conjecture Refiner → loop back
 
 For a detailed description of each stage, agent inventory, data flow, and cost control architecture, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-### Proof Pipeline (with --use-critic --use-detailer)
+### Proof Pipeline
 
-When proving complex theorems, the pipeline decomposes and validates:
+The proof pipeline follows the architecture from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134):
 
-1. **ProofSearch** — tries automated tactics, then iterative proving (3 strategies × 5 iterations)
-2. **ProofCorrector** — analyzes compilation errors, suggests fixes, retries
-3. **ClaimCheck** — rejects unsound proofs (falls through to decomposition)
-4. **LemmaBreakdown** — decomposes theorem into sub-lemmas
-5. **ProofCritic** — identifies which sub-lemmas are prior work (e.g., Kantorovich duality)
-6. **ProofDetailer** — enriches proof sketches with mathematical detail
-7. **LemmaLeanifier** — translates sub-lemmas to Lean 4 (with domain-specific data packages)
-8. **RecursiveProver** — composes axiomatized sub-lemmas into root proof via `have` tactic
+1. **Automated Tactics** — tries `grind`, `simp_all`, `field_simp; ring`, `field_simp at *; nlinarith` (solves ~40% of AMC-level problems in seconds)
+2. **ProofSearch** — iterative proving with extended thinking (2 strategies × 2 iterations)
+3. **ProofCorrector** — analyzes compilation errors, suggests fixes, retries
+4. **NaturalLanguageProver** — generates structured informal proof sketch before formalization
+5. **ProofCritic** — adversarial loop until no logical gaps remain in the NL proof
+6. **ProofDetailer** — expands NL proof into tactic-level steps (runs on ALL nodes)
+7. **LemmaBreakdown** — decomposes into sub-lemmas guided by the validated NL proof + tactic hints
+8. **LemmaLeanifier** — translates sub-lemmas to Lean 4 with Mathlib search context
+9. **RecursiveProver** — parent-before-children proving with extended thinking and compiler error feedback
 
 ## Production Hardening
 
@@ -218,7 +228,9 @@ When proving complex theorems, the pipeline decomposes and validates:
 - **Tiered session memory** — hot/warm/cold tiers keep the most relevant context in working memory
 - **Checkpointing at all 8 pipeline stages** — exploring, conjecturing, formalizing, checking intent, searching counterexamples, proving, refining, complete
 - **Session resume** — `CheckpointManager` persists state so interrupted sessions can resume from the last checkpoint
-- **Verifier-guided self-correction** — Lean compiler errors fed back as structured feedback to retry loop
+- **Verifier-guided self-correction** — Lean compiler errors fed back as structured feedback to retry loop (including root assembly retries)
+- **Natural language proof stage** — generates informal proof sketches with adversarial critic loop before Lean formalization
+- **Search-augmented leanification** — Mathlib search results injected into formalization prompts for better tactic selection
 - **Progress tracking** — `rich.Progress` shows real-time pipeline stage, elapsed time, and cost
 - **Data package injection** — domain-specific Lean 4 definitions auto-detected and injected for formalization quality
 

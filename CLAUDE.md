@@ -32,7 +32,7 @@ agentic-research --help
 agentic-research --model claude-sonnet-4-20250514 explore 'my idea'
 
 # Eval harness
-python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid
+python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid --sample-size 30 --seed 42 --extended-thinking
 ```
 
 ## Project Structure
@@ -41,8 +41,9 @@ python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2
 agentic_research/
 ├── agents/           # LLM-powered agents (explorer, conjecturer, prover, intent judge, etc.)
 │   ├── base.py       # BaseAgent with retry logic and token tracking
-│   ├── llm_client.py # Anthropic API wrapper
-│   └── ...           # 20 specialized agents
+│   ├── llm_client.py # Anthropic API wrapper (adaptive thinking, auto max_tokens guard)
+│   ├── nl_prover.py  # Natural language proof stage (generates informal proof sketches)
+│   └── ...           # 20+ specialized agents
 ├── cli/              # Click-based CLI entry point
 ├── eval/             # Benchmark evaluation harness (miniF2F, PutnamBench)
 ├── memory/           # Research session memory (conjectures, directions, preferences)
@@ -53,7 +54,7 @@ agentic_research/
 │   └── rollback.py   # CheckpointManager for session recovery
 ├── pipelines/        # Multi-agent pipelines (formalization, proof, refinement)
 └── tools/            # Lean 4 integration (REPL, search, lookup)
-tests/                # 13 test files, 359+ tests
+tests/                # 18 test files, 812+ tests
 ```
 
 ## Coding Conventions

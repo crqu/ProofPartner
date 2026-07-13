@@ -203,7 +203,7 @@ class TestProofDetailer:
         )
 
         llm = _make_mock_llm([])
-        detailer = ProofDetailer(llm_client=llm)
+        detailer = ProofDetailer(llm_client=llm, complexity_threshold=40)
         ctx = AgentContext(
             task="detail",
             metadata={"lemma_tree": tree.model_dump()},

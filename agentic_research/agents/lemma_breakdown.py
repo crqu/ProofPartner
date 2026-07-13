@@ -108,6 +108,7 @@ class LemmaBreakdown(BaseAgent):
         critic_issues = context.metadata.get("critic_issues", [])
         lean_preamble = context.metadata.get("lean_preamble")
         nl_proof_context = context.metadata.get("nl_proof_context")
+        tactic_hints = context.metadata.get("tactic_hints", "")
 
         user_content = LEMMA_BREAKDOWN_USER_TEMPLATE.format(
             statement_nl=statement_nl,
@@ -117,6 +118,13 @@ class LemmaBreakdown(BaseAgent):
 
         if nl_proof_context:
             user_content += self._format_nl_proof_context(nl_proof_context)
+
+        if tactic_hints:
+            user_content += (
+                "\n\n## Tactic-Level Hints\n"
+                f"{tactic_hints}\n\n"
+                "Align your sub-lemma decomposition with these tactic suggestions."
+            )
 
         if lean_preamble:
             user_content += PREAMBLE_CONTEXT_SECTION.format(

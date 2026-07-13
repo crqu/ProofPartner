@@ -243,11 +243,19 @@ class ProofPipeline:
         if self._nl_prover and self._use_nl_proof_stage:
             nl_sketch = self._run_nl_proof_stage(lean_statement, statement_nl)
 
+        tactic_hints = ""
+        if nl_sketch and nl_sketch.proof_steps:
+            detailer = ProofDetailer(llm_client=self._llm)
+            tactic_hints = detailer.detail_sketch(nl_sketch)
+            self._accumulate_tokens(detailer.cumulative_tokens)
+            log.info("proof_pipeline_sketch_detailed", hint_len=len(tactic_hints))
+
         self._notify_progress("Lemma Breakdown", "Decomposing into lemmas")
 
         tree = self._run_lemma_breakdown(
             lean_statement, statement_nl, search_result,
             nl_proof_context=nl_sketch,
+            tactic_hints=tactic_hints,
         )
         if tree is None:
             return ProofPipelineResult(
@@ -296,7 +304,7 @@ class ProofPipeline:
             tree = self._run_proof_detailer(tree)
 
         self._notify_progress("Leanification", "Converting lemmas to Lean 4")
-        tree = self._run_lemma_leanifier(tree)
+        tree = self._run_lemma_leanifier(tree, tactic_hints=tactic_hints)
         if tree is None:
             return ProofPipelineResult(
                 statement=lean_statement,
@@ -475,6 +483,7 @@ class ProofPipeline:
         search_result: ProofSearchResult,
         critic_feedback: list[CritiqueIssue] | None = None,
         nl_proof_context: NLProofSketch | None = None,
+        tactic_hints: str = "",
     ) -> LemmaTree | None:
         failed_strategies = "\n".join(
             f"- {s.strategy_type.value}: {s.description}"
@@ -487,6 +496,8 @@ class ProofPipeline:
         }
         if nl_proof_context:
             metadata["nl_proof_context"] = nl_proof_context.model_dump()
+        if tactic_hints:
+            metadata["tactic_hints"] = tactic_hints
         if self._lean_preamble:
             metadata["lean_preamble"] = self._lean_preamble
         if critic_feedback:
@@ -608,7 +619,9 @@ class ProofPipeline:
         log.info("type_first_formalization_done", num_types=len(accepted_defs))
         return type_context
 
-    def _run_lemma_leanifier(self, tree: LemmaTree) -> LemmaTree | None:
+    def _run_lemma_leanifier(
+        self, tree: LemmaTree, tactic_hints: str = ""
+    ) -> LemmaTree | None:
         agent = LemmaLeanifier(
             llm_client=self._llm,
             lean_repl=self._repl,
@@ -617,9 +630,12 @@ class ProofPipeline:
             axiom_keywords=self._axiom_keywords,
             lean_search=self._search,
         )
+        metadata: dict = {"lemma_tree": tree.model_dump()}
+        if tactic_hints:
+            metadata["tactic_hints"] = tactic_hints
         ctx = AgentContext(
             task="leanify lemmas",
-            metadata={"lemma_tree": tree.model_dump()},
+            metadata=metadata,
         )
         result = agent.run(ctx)
         self._accumulate_tokens(agent.cumulative_tokens)

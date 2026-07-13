@@ -1868,7 +1868,7 @@ class TestPipelineWeakChildRetry:
         with (
             patch.object(pipeline, "_run_lemma_breakdown", side_effect=tracking_breakdown),
             patch.object(pipeline, "_run_proof_search") as mock_search,
-            patch.object(pipeline, "_run_lemma_leanifier", side_effect=lambda t: t),
+            patch.object(pipeline, "_run_lemma_leanifier", side_effect=lambda t, **kw: t),
             patch.object(pipeline, "_run_recursive_prover", side_effect=mock_recursive),
             patch.object(pipeline, "_run_flatten_finalize", return_value="proof code"),
         ):

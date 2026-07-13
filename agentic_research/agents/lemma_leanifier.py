@@ -102,6 +102,7 @@ class LemmaLeanifier(BaseAgent):
             )
 
         tree = LemmaTree.model_validate(tree_data)
+        tactic_hints = context.metadata.get("tactic_hints", "")
         total_tokens = TokenUsage()
         failed_nodes: list[str] = []
 
@@ -116,7 +117,9 @@ class LemmaLeanifier(BaseAgent):
             parent_stmt = parent.statement_lean if parent else ""
             siblings = self._get_sibling_statements(tree, node)
 
-            lean_code, tokens = self._leanify_node(node, parent_stmt, siblings)
+            lean_code, tokens = self._leanify_node(
+                node, parent_stmt, siblings, tactic_hints=tactic_hints
+            )
             total_tokens.input_tokens += tokens.input_tokens
             total_tokens.output_tokens += tokens.output_tokens
 
@@ -193,7 +196,12 @@ class LemmaLeanifier(BaseAgent):
         return text
 
     def _leanify_node(
-        self, node: ProofNode, parent_statement: str, sibling_statements: str
+        self,
+        node: ProofNode,
+        parent_statement: str,
+        sibling_statements: str,
+        *,
+        tactic_hints: str = "",
     ) -> tuple[str | None, TokenUsage]:
         prebuilt = self._match_prebuilt_axiom(node)
         if prebuilt:
@@ -233,6 +241,13 @@ class LemmaLeanifier(BaseAgent):
                 "The following Mathlib theorems may be useful for this formalization:\n"
                 f"{search_results}\n\n"
                 "Use these theorem names and type signatures to guide your Lean 4 code."
+            )
+
+        if tactic_hints:
+            user_content += (
+                "\n\n## Tactic Suggestions\n"
+                f"{tactic_hints}\n\n"
+                "Use these suggested tactics to guide your Lean 4 formalization."
             )
 
         response = self._llm.complete(

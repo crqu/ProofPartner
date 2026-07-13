@@ -695,9 +695,9 @@ class TestTypeFirstFormalization:
             call_order.append("type_first")
             return None
 
-        def track_leanifier(tree):
+        def track_leanifier(tree, **kwargs):
             call_order.append("leanifier")
-            return original_leanifier(tree)
+            return original_leanifier(tree, **kwargs)
 
         search_result = ProofSearchResult(
             statement="theorem foo : True",
@@ -760,7 +760,7 @@ class TestTypeFirstFormalization:
 
         leanifier_preamble = None
 
-        def capture_leanifier(tree):
+        def capture_leanifier(tree, **kwargs):
             nonlocal leanifier_preamble
             leanifier_preamble = pipeline._lean_preamble
             return tree
@@ -822,7 +822,7 @@ class TestTypeFirstFormalization:
 
         leanifier_preamble_at_call = None
 
-        def capture_leanifier(tree):
+        def capture_leanifier(tree, **kwargs):
             nonlocal leanifier_preamble_at_call
             leanifier_preamble_at_call = pipeline._lean_preamble
             return tree

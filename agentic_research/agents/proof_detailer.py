@@ -9,6 +9,8 @@ from __future__ import annotations
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
+    DETAIL_SKETCH_SYSTEM,
+    DETAIL_SKETCH_USER_TEMPLATE,
     PROOF_DETAILER_SYSTEM,
     PROOF_DETAILER_USER_TEMPLATE,
 )
@@ -19,11 +21,11 @@ from agentic_research.models.agents import (
     AgentStatus,
     TokenUsage,
 )
-from agentic_research.models.proof import LemmaTree, ProofNode
+from agentic_research.models.proof import LemmaTree, NLProofSketch, ProofNode
 
 log = get_logger(__name__)
 
-COMPLEXITY_THRESHOLD = 40
+COMPLEXITY_THRESHOLD = 0
 COMPLEXITY_CUE_PHRASES = [
     "clearly", "obviously", "trivially", "by standard arguments",
     "it is well known", "straightforward", "immediate",
@@ -148,6 +150,35 @@ class ProofDetailer(BaseAgent):
 
         sketch = self._parse_sketch(response.content)
         return sketch, response.token_usage
+
+    def detail_sketch(self, sketch: NLProofSketch) -> str:
+        """Expand NL proof steps into tactic-level hints."""
+        step_lines = []
+        for i, step in enumerate(sketch.proof_steps, 1):
+            parts = [f"Step {i}: {step.claim}"]
+            parts.append(f"  Reasoning: {step.reasoning}")
+            for sc in step.sub_claims:
+                parts.append(f"  - Sub-claim: {sc}")
+            step_lines.append("\n".join(parts))
+
+        user_content = DETAIL_SKETCH_USER_TEMPLATE.format(
+            overall_strategy=sketch.overall_strategy,
+            proof_steps="\n\n".join(step_lines),
+        )
+
+        response = self._llm.complete(
+            system=DETAIL_SKETCH_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+            temperature=0.3,
+            use_cache=True,
+        )
+
+        log.info(
+            "proof_detailer_sketch_detailed",
+            steps=len(sketch.proof_steps),
+            response_len=len(response.content),
+        )
+        return response.content.strip()
 
     def _parse_sketch(self, response_text: str) -> str | None:
         parsed = self._llm.extract_json(response_text)

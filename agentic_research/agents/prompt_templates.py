@@ -1401,6 +1401,31 @@ Break this lemma into 3-5 intermediate sub-claims, each provable in \
 1-3 Lean tactics. Return as JSON.
 """
 
+DETAIL_SKETCH_SYSTEM = """\
+You are an expert in Lean 4 tactics and Mathlib. Given a natural language \
+proof sketch, expand each proof step into tactic-level hints: which Lean 4 \
+tactics to use, which Mathlib lemmas apply, and what intermediate `have` \
+statements to introduce. Keep it concise — one line of tactic suggestion \
+per step.
+"""
+
+DETAIL_SKETCH_USER_TEMPLATE = """\
+## Proof Sketch
+
+Strategy: {overall_strategy}
+
+### Steps
+{proof_steps}
+
+For each step above, suggest:
+1. The specific Lean 4 tactic(s) to use (simp, ring, field_simp, linarith, etc.)
+2. Relevant Mathlib lemma names (mul_eq_zero, sub_eq_zero, Finset.sum_comm, etc.)
+3. Intermediate `have` goals that break the step into provable pieces
+
+Return one line per step in the format:
+Step N: <tactic suggestions>
+"""
+
 PARENT_PROOF_SYSTEM = """\
 You are an expert Lean 4 theorem prover. Prove a parent theorem \
 assuming its child lemmas are true (they appear as axiom declarations \

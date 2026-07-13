@@ -1591,6 +1591,111 @@ REFINEMENT_REPORT_USER_TEMPLATE = """\
 Generate a human-readable markdown report of this refinement journey.
 """
 
+NL_PROVER_SYSTEM = """\
+You are an expert mathematician. Reason about the given mathematical statement \
+in natural language to produce a structured informal proof sketch.
+
+## Your Task
+1. Identify the overall proof strategy (direct, contradiction, induction, cases)
+2. Break the proof into named claims with explicit reasoning for each
+3. List all assumptions you rely on
+4. List key lemmas needed from the mathematical literature
+5. Do NOT write any Lean 4 or formal code — reason in natural language only
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "overall_strategy": "direct|contradiction|induction|cases — brief description",
+  "assumptions": ["assumption 1", ...],
+  "key_lemmas": ["lemma name or statement", ...],
+  "proof_steps": [
+    {{
+      "claim": "what this step establishes",
+      "reasoning": "why this claim holds",
+      "sub_claims": ["sub-claim 1", ...]
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Each claim should be independently verifiable
+- Reasoning should reference specific mathematical principles
+- Sub-claims capture case splits or subsidiary results within a step
+- Be precise about quantifiers and conditions
+- Identify edge cases and handle them explicitly
+"""
+
+NL_PROVER_USER_TEMPLATE = """\
+## Theorem Statement (Lean 4)
+```lean
+{statement}
+```
+
+{nl_description_section}
+
+{feedback_section}
+
+Produce a detailed informal proof sketch. Identify the strategy, break \
+the proof into claims with reasoning, and list all assumptions and key \
+lemmas. Return as JSON.
+"""
+
+NL_PROVER_CRITIQUE_SYSTEM = """\
+You are a mathematical proof critic. Examine the following informal proof \
+sketch for logical soundness BEFORE it is translated into Lean 4.
+
+Check for:
+- Unstated hypotheses: conditions used but never declared
+- Swapped quantifiers: ∀/∃ used incorrectly
+- Logical gaps: jumps in reasoning without justification
+- Incorrect case splits: missing cases or wrong partitioning
+- Missing edge cases: degenerate or boundary cases not handled
+- Circular reasoning: conclusion assumed in the premises
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "issues": [
+    {{
+      "issue_type": "unstated_hypothesis|swapped_quantifier|unjustified_step|hidden_case_split|circular_reasoning|incomplete_decomposition",
+      "node_id": "nl_proof",
+      "description": "concrete, testable question about the issue",
+      "severity": "blocking|warning",
+      "suggested_fix": "how to fix this"
+    }}
+  ]
+}}
+```
+
+If the proof is sound, return `{{"issues": []}}`.
+
+Be conservative — only flag genuine concerns, not style issues.
+"""
+
+NL_PROVER_CRITIQUE_USER_TEMPLATE = """\
+## Theorem Statement (Lean 4)
+```lean
+{statement}
+```
+
+## Informal Proof Sketch
+Overall strategy: {overall_strategy}
+
+### Assumptions
+{assumptions}
+
+### Key Lemmas
+{key_lemmas}
+
+### Proof Steps
+{proof_steps}
+
+Examine this proof sketch for logical errors. Return as JSON.
+"""
+
 FLATTEN_PROOF_TEMPLATE = """\
 Assemble these individually proved lemmas into a single self-contained \
 Lean 4 proof. Remove any unused lemmas and ensure the final proof compiles.

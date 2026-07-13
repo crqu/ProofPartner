@@ -75,6 +75,30 @@ class LemmaBreakdown(BaseAgent):
             lines.append(line)
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_nl_proof_context(nl_ctx: dict) -> str:
+        """Format an NLProofSketch dict into a prompt section."""
+        lines = ["\n## Validated Informal Proof Sketch"]
+        strategy = nl_ctx.get("overall_strategy", "")
+        if strategy:
+            lines.append(f"Strategy: {strategy}")
+        for assumption in nl_ctx.get("assumptions", []):
+            lines.append(f"- Assumption: {assumption}")
+        for lemma in nl_ctx.get("key_lemmas", []):
+            lines.append(f"- Key lemma: {lemma}")
+        for i, step in enumerate(nl_ctx.get("proof_steps", []), 1):
+            claim = step.get("claim", "")
+            reasoning = step.get("reasoning", "")
+            lines.append(f"\nStep {i}: {claim}")
+            lines.append(f"  Reasoning: {reasoning}")
+            for sc in step.get("sub_claims", []):
+                lines.append(f"  - Sub-claim: {sc}")
+        lines.append(
+            "\nUse the above proof sketch to guide your decomposition. "
+            "Align sub-lemmas with the proof steps above."
+        )
+        return "\n".join(lines)
+
     def _execute(self, context: AgentContext) -> AgentResult:
         statement_nl = context.task
         statement_lean = context.metadata.get("statement_lean", "")
@@ -83,12 +107,16 @@ class LemmaBreakdown(BaseAgent):
         depth = context.metadata.get("depth", 0)
         critic_issues = context.metadata.get("critic_issues", [])
         lean_preamble = context.metadata.get("lean_preamble")
+        nl_proof_context = context.metadata.get("nl_proof_context")
 
         user_content = LEMMA_BREAKDOWN_USER_TEMPLATE.format(
             statement_nl=statement_nl,
             statement_lean=statement_lean,
             failed_attempts=failed_attempts,
         )
+
+        if nl_proof_context:
+            user_content += self._format_nl_proof_context(nl_proof_context)
 
         if lean_preamble:
             user_content += PREAMBLE_CONTEXT_SECTION.format(

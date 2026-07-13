@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentic_research.agents.llm_client import LLMClient
+from agentic_research.agents.nl_prover import NaturalLanguageProver
 from agentic_research.eval.benchmarks import load_minif2f, load_putnam_bench
 from agentic_research.eval.scorer import score_eval_run
 from agentic_research.logging import configure_logging, get_logger
@@ -88,6 +89,10 @@ def _evaluate_proof_discovery(
 
     lean_repl = LeanRepl(ReplConfig(backend=detect_backend()))
     prover_config = ProverConfig(use_extended_thinking=config.use_extended_thinking)
+    nl_prover = NaturalLanguageProver(
+        llm_client=shared.llm_client,
+        prover_config=prover_config,
+    )
     pipeline = ProofPipeline(
         llm_client=shared.llm_client,
         lean_repl=lean_repl,
@@ -95,6 +100,8 @@ def _evaluate_proof_discovery(
         prover_config=prover_config,
         max_critic_retries=config.max_critic_retries,
         use_intent_judge=config.use_intent_judge,
+        nl_prover=nl_prover,
+        use_nl_proof_stage=True,
     )
 
     full_statement = (

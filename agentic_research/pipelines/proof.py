@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentic_research.agents.nl_prover import NaturalLanguageProver
 
 from agentic_research.agents.auctioneer import Auctioneer
 from agentic_research.agents.claim_check import ClaimCheck
@@ -44,6 +48,7 @@ from agentic_research.models.proof import (
     FailureDiagnosis,
     FailureType,
     LemmaTree,
+    NLProofSketch,
     NodeStatus,
     ProofCorrection,
     ProofPipelineResult,
@@ -77,6 +82,8 @@ class ProofPipeline:
         max_critic_retries: int = 0,
         use_proof_detailer: bool = True,
         use_intent_judge: bool = False,
+        nl_prover: NaturalLanguageProver | None = None,
+        use_nl_proof_stage: bool = True,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
@@ -93,6 +100,8 @@ class ProofPipeline:
         self._max_critic_retries = max_critic_retries
         self._use_proof_detailer = use_proof_detailer
         self._use_intent_judge = use_intent_judge
+        self._nl_prover = nl_prover
+        self._use_nl_proof_stage = use_nl_proof_stage
         self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
         self._statement_nl: str = ""
@@ -233,9 +242,17 @@ class ProofPipeline:
             )
 
         log.info("proof_pipeline_decomposing")
+
+        nl_sketch: NLProofSketch | None = None
+        if self._nl_prover and self._use_nl_proof_stage:
+            nl_sketch = self._run_nl_proof_stage(lean_statement, statement_nl)
+
         self._notify_progress("Lemma Breakdown", "Decomposing into lemmas")
 
-        tree = self._run_lemma_breakdown(lean_statement, statement_nl, search_result)
+        tree = self._run_lemma_breakdown(
+            lean_statement, statement_nl, search_result,
+            nl_proof_context=nl_sketch,
+        )
         if tree is None:
             return ProofPipelineResult(
                 statement=lean_statement,
@@ -405,12 +422,63 @@ class ProofPipeline:
             failure_reason="Proof search agent returned no result",
         )
 
+    _MAX_NL_CRITIC_ITERATIONS = 3
+
+    def _run_nl_proof_stage(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+    ) -> NLProofSketch | None:
+        """Generate and critique an NL proof sketch before decomposition."""
+        assert self._nl_prover is not None
+        self._notify_progress("NL Proof", "Generating informal proof sketch")
+
+        sketch, gen_tokens = self._nl_prover.generate_proof(
+            statement=lean_statement,
+            statement_nl=statement_nl or None,
+        )
+        self._accumulate_tokens(gen_tokens)
+
+        if not sketch.proof_steps:
+            log.warning("nl_proof_stage_empty_sketch")
+            return None
+
+        critic = ProofCritic(llm_client=self._llm)
+        for iteration in range(self._MAX_NL_CRITIC_ITERATIONS):
+            critique = critic.audit_nl_proof(sketch, lean_statement)
+            self._accumulate_tokens(critique.token_usage)
+
+            if not critique.issues:
+                log.info("nl_proof_stage_passed", iterations=iteration + 1)
+                break
+
+            log.info(
+                "nl_proof_stage_critique",
+                iteration=iteration + 1,
+                issues=len(critique.issues),
+            )
+
+            sketch, regen_tokens = self._nl_prover.generate_proof(
+                statement=lean_statement,
+                statement_nl=statement_nl or None,
+                feedback=critique,
+            )
+            self._accumulate_tokens(regen_tokens)
+
+        log.info(
+            "nl_proof_stage_done",
+            steps=len(sketch.proof_steps),
+            strategy=sketch.overall_strategy,
+        )
+        return sketch
+
     def _run_lemma_breakdown(
         self,
         lean_statement: str,
         statement_nl: str,
         search_result: ProofSearchResult,
         critic_feedback: list[CritiqueIssue] | None = None,
+        nl_proof_context: NLProofSketch | None = None,
     ) -> LemmaTree | None:
         failed_strategies = "\n".join(
             f"- {s.strategy_type.value}: {s.description}"
@@ -421,6 +489,8 @@ class ProofPipeline:
             "statement_lean": lean_statement,
             "failed_attempts": failed_strategies or "None",
         }
+        if nl_proof_context:
+            metadata["nl_proof_context"] = nl_proof_context.model_dump()
         if self._lean_preamble:
             metadata["lean_preamble"] = self._lean_preamble
         if critic_feedback:

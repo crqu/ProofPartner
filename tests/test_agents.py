@@ -74,7 +74,7 @@ class TestAgentResult:
 class TestProverConfig:
     def test_defaults(self):
         config = ProverConfig()
-        assert config.max_iterations == 5
+        assert config.max_iterations == 2
         assert config.model == "claude-opus-4-6-20250616"
         assert config.temperature == 0.0
         assert config.max_tokens == 16384
@@ -724,7 +724,7 @@ class TestIterativeProver:
         llm = _make_mock_llm_client([])
 
         prover = IterativeProver(llm_client=llm, lean_repl=repl)
-        assert prover.config.max_iterations == 5
+        assert prover.config.max_iterations == 2
         assert prover.config.model == "claude-opus-4-6-20250616"
         assert prover.name == "iterative_prover"
 

@@ -139,7 +139,7 @@ class EvalConfig(BaseModel):
     benchmark: BenchmarkSource = BenchmarkSource.MINIF2F
     split: ProblemSplit = ProblemSplit.VALIDATION
     pass_k: int = Field(default=1, ge=1, description="Number of attempts per problem (pass@k)")
-    timeout_seconds: int = Field(default=1800, description="Timeout per problem")
+    timeout_seconds: int = Field(default=600, description="Timeout per problem")
     sample_size: int | None = Field(default=None, description="Subset of problems to evaluate")
     seed: int = Field(default=0, description="Random seed for sampling")
     data_dir: Path = Field(default=Path("data/benchmarks"), description="Where to store benchmark data")

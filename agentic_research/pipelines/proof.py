@@ -72,7 +72,7 @@ class ProofPipeline:
         lean_search: LeanSearch,
         *,
         prover_config: ProverConfig | None = None,
-        max_strategies: int = 3,
+        max_strategies: int = 2,
         max_depth: int = 5,
         max_retries_per_node: int = 3,
         use_claim_check: bool = True,

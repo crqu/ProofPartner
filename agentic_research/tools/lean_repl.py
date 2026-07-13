@@ -338,6 +338,8 @@ class LeanRepl(BaseTool):
             "simp_all",
             "field_simp; ring",
             "field_simp; nlinarith",
+            "field_simp at *; nlinarith",
+            "field_simp at *; ring",
         ]
 
         for tactic in tactics:

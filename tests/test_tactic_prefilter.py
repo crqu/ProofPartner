@@ -1,4 +1,4 @@
-"""Tests for the automated tactic pre-filter (grind/simp_all before LLM)."""
+"""Tests for the 2-tier automated tactic pre-filter (combinator + aesop)."""
 
 from __future__ import annotations
 
@@ -42,34 +42,35 @@ def _timeout_result() -> CompilationResult:
 
 
 # ---------------------------------------------------------------------------
-# LeanRepl.try_automated_tactics
+# LeanRepl.try_automated_tactics — 2-tier approach
 # ---------------------------------------------------------------------------
 
 
-def test_grind_success():
+def test_tier1_success():
     repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
     repl._backend = MagicMock()
     repl._backend.compile.return_value = _ok_result()
 
     result = repl.try_automated_tactics(STMT)
 
-    assert result == "grind"
+    assert result == "tier1_combinator"
     repl._backend.compile.assert_called_once()
     call_code = repl._backend.compile.call_args[0][0]
-    assert "by grind" in call_code
+    assert "by" in call_code
+    assert "first" in call_code
 
 
-def test_grind_fail_simp_success():
+def test_tier1_fail_tier2_success():
     repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
     repl._backend = MagicMock()
     repl._backend.compile.side_effect = [_fail_result(), _ok_result()]
 
     result = repl.try_automated_tactics(STMT)
 
-    assert result == "simp_all"
+    assert result == "aesop"
     assert repl._backend.compile.call_count == 2
     second_call_code = repl._backend.compile.call_args_list[1][0][0]
-    assert "by simp_all" in second_call_code
+    assert "by aesop" in second_call_code
 
 
 def test_both_fail():
@@ -80,7 +81,7 @@ def test_both_fail():
     result = repl.try_automated_tactics(STMT)
 
     assert result is None
-    assert repl._backend.compile.call_count == 6
+    assert repl._backend.compile.call_count == 2
 
 
 def test_timeout_handling():
@@ -91,6 +92,7 @@ def test_timeout_handling():
     result = repl.try_automated_tactics(STMT, timeout_seconds=1.0)
 
     assert result is None
+    assert repl._backend.compile.call_count == 2
 
 
 def test_imports_included():
@@ -102,6 +104,33 @@ def test_imports_included():
 
     call_code = repl._backend.compile.call_args[0][0]
     assert "import Mathlib.Tactic" in call_code
+
+
+def test_tier1_timeout_cap():
+    """Tier 1 timeout is capped at 5s regardless of caller timeout."""
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+    repl._backend = MagicMock()
+    repl._backend.compile.return_value = _fail_result()
+
+    repl.try_automated_tactics(STMT, timeout_seconds=30.0)
+
+    tier1_timeout = repl._backend.compile.call_args_list[0][0][1]
+    tier2_timeout = repl._backend.compile.call_args_list[1][0][1]
+    assert tier1_timeout == 5
+    assert tier2_timeout == 10
+
+
+def test_tier1_combinator_contains_expected_tactics():
+    """The tier1 compilation code includes the full combinator block."""
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+    repl._backend = MagicMock()
+    repl._backend.compile.return_value = _fail_result()
+
+    repl.try_automated_tactics(STMT)
+
+    tier1_code = repl._backend.compile.call_args_list[0][0][0]
+    for tactic in ["omega", "decide", "norm_num", "ring", "simp_all", "grind"]:
+        assert tactic in tier1_code
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +145,7 @@ def test_proof_pipeline_uses_prefilter():
     mock_repl = MagicMock(spec=LeanRepl)
     mock_search = MagicMock()
 
-    mock_repl.try_automated_tactics.return_value = "grind"
+    mock_repl.try_automated_tactics.return_value = "tier1_combinator"
 
     pipeline = ProofPipeline(
         llm_client=mock_llm,
@@ -128,7 +157,7 @@ def test_proof_pipeline_uses_prefilter():
 
     assert isinstance(result, ProofPipelineResult)
     assert result.proved is True
-    assert "by grind" in result.final_proof
+    assert "by tier1_combinator" in result.final_proof
     mock_repl.try_automated_tactics.assert_called_once_with(STMT)
 
 

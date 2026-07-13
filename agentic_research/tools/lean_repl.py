@@ -31,6 +31,24 @@ from agentic_research.tools.base import BaseTool
 
 log = get_logger(__name__)
 
+TIER1_COMBINATOR = (
+    "first\n"
+    "  | omega\n"
+    "  | decide\n"
+    "  | norm_num\n"
+    "  | ring\n"
+    "  | simp_all\n"
+    "  | field_simp; ring\n"
+    "  | field_simp; nlinarith\n"
+    "  | field_simp at *; nlinarith\n"
+    "  | field_simp at *; ring\n"
+    "  | positivity\n"
+    "  | tauto\n"
+    "  | ring_nf; simp\n"
+    "  | abel\n"
+    "  | grind"
+)
+
 
 class ReplBackend(str, Enum):
     LEAN_DOJO = "lean_dojo"
@@ -329,43 +347,64 @@ class LeanRepl(BaseTool):
     ) -> str | None:
         """Try cheap automated tactics before LLM proof search.
 
-        Escalation chain: grind -> simp_all -> None (fall through to LLM).
-        Returns the successful tactic string or None.
+        Uses a 2-tier approach with at most 2 compilation calls:
+          Tier 1: Lean 4 ``first`` combinator bundling 15 finishing tactics (~5s).
+          Tier 2: ``aesop`` general-purpose proof search (~10s).
+        Returns the successful tactic identifier or None.
         """
         import_block = "\n".join(f"import {imp}" for imp in (imports or []))
-        tactics = [
-            "grind",
-            "simp_all",
-            "field_simp; ring",
-            "field_simp; nlinarith",
-            "field_simp at *; nlinarith",
-            "field_simp at *; ring",
-        ]
 
-        for tactic in tactics:
-            code = f"{import_block}\n{theorem_statement} by {tactic}".strip()
-            log.info("try_automated_tactic", tactic=tactic)
-            start = time.monotonic()
-            result = self._backend.compile(code, int(timeout_seconds))
-            elapsed = time.monotonic() - start
+        # Tier 1 — combinator of 15 core finishing tactics in a single compile
+        tier1_timeout = int(min(timeout_seconds, 5))
+        tier1_code = f"{import_block}\n{theorem_statement} by\n  {TIER1_COMBINATOR}".strip()
+        log.info("try_automated_tactic", tactic="tier1_combinator")
+        start = time.monotonic()
+        result = self._backend.compile(tier1_code, tier1_timeout)
+        elapsed = time.monotonic() - start
 
-            if (
-                result.compilation_status == CompilationStatus.OK
-                and result.all_goals_closed
-            ):
-                log.info(
-                    "automated_tactic_success",
-                    tactic=tactic,
-                    elapsed_seconds=round(elapsed, 3),
-                )
-                return tactic
-
-            log.debug(
-                "automated_tactic_failed",
-                tactic=tactic,
-                status=result.compilation_status.value,
+        if (
+            result.compilation_status == CompilationStatus.OK
+            and result.all_goals_closed
+        ):
+            log.info(
+                "automated_tactic_success",
+                tactic="tier1_combinator",
                 elapsed_seconds=round(elapsed, 3),
             )
+            return "tier1_combinator"
+
+        log.debug(
+            "automated_tactic_failed",
+            tactic="tier1_combinator",
+            status=result.compilation_status.value,
+            elapsed_seconds=round(elapsed, 3),
+        )
+
+        # Tier 2 — aesop general-purpose proof search
+        tier2_timeout = int(min(timeout_seconds, 10))
+        tier2_code = f"{import_block}\n{theorem_statement} by aesop".strip()
+        log.info("try_automated_tactic", tactic="aesop")
+        start = time.monotonic()
+        result = self._backend.compile(tier2_code, tier2_timeout)
+        elapsed = time.monotonic() - start
+
+        if (
+            result.compilation_status == CompilationStatus.OK
+            and result.all_goals_closed
+        ):
+            log.info(
+                "automated_tactic_success",
+                tactic="aesop",
+                elapsed_seconds=round(elapsed, 3),
+            )
+            return "aesop"
+
+        log.debug(
+            "automated_tactic_failed",
+            tactic="aesop",
+            status=result.compilation_status.value,
+            elapsed_seconds=round(elapsed, 3),
+        )
 
         return None
 

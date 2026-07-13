@@ -233,13 +233,9 @@ class ProofPipeline:
                         )
 
         if not search_result.needs_decomposition and not force_decomposition:
-            return ProofPipelineResult(
-                statement=lean_statement,
-                search_result=search_result,
-                failure_stage="proof_search",
-                failure_reason=search_result.failure_reason,
-                total_token_usage=self._total_tokens,
-            )
+            log.info("proof_pipeline_forcing_decomposition",
+                     reason="proof_search_exhausted")
+            force_decomposition = True
 
         log.info("proof_pipeline_decomposing")
 

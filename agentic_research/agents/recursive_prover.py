@@ -169,12 +169,23 @@ class RecursiveProver(BaseAgent):
 
     def _prove_parent(self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage) -> bool:
         """Parent-before-children: prove parent using child sorry-premises, then recurse."""
+        previous_proof: str | None = None
+        previous_errors: str = ""
         for retry in range(self._max_retries_per_node):
             node.retries_used = retry + 1
 
-            parent_proved = self._prove_parent_with_children(tree, node, tokens)
+            parent_proved, attempt_code, attempt_errors = (
+                self._prove_parent_with_children(
+                    tree, node, tokens,
+                    previous_proof=previous_proof,
+                    previous_errors=previous_errors,
+                )
+            )
 
             if not parent_proved:
+                previous_proof = attempt_code
+                previous_errors = attempt_errors
+
                 diagnosis = self._diagnose_failure(tree, node, tokens)
                 node.failure_diagnosis = diagnosis
 
@@ -243,9 +254,17 @@ class RecursiveProver(BaseAgent):
         return f"{stmt}\n-- Use: have <result> := {name} <args>"
 
     def _prove_parent_with_children(
-        self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage
-    ) -> bool:
-        """Prove the parent assuming child lemmas are true (sorry)."""
+        self,
+        tree: LemmaTree,
+        node: ProofNode,
+        tokens: TokenUsage,
+        previous_proof: str | None = None,
+        previous_errors: str = "",
+    ) -> tuple[bool, str, str]:
+        """Prove the parent assuming child lemmas are true (sorry).
+
+        Returns (proved, proof_code_attempted, compilation_errors).
+        """
         children = tree.get_children(node.node_id)
         child_decls = "\n\n".join(
             self._format_child_declaration(c)
@@ -253,17 +272,25 @@ class RecursiveProver(BaseAgent):
         )
 
         if not child_decls:
-            return False
+            return False, "", ""
 
         user_content = PARENT_PROOF_USER_TEMPLATE.format(
             parent_statement=node.statement_lean,
             child_declarations=child_decls,
         )
 
+        if previous_proof and previous_errors:
+            user_content += (
+                "\n\n## Previous Attempt (FAILED — do NOT repeat)\n"
+                f"```lean\n{previous_proof}\n```\n\n"
+                f"## Compilation Errors\n{previous_errors}\n\n"
+                "Fix the errors above. Try a DIFFERENT proof approach."
+            )
+
         response = self._llm.complete(
             system=PARENT_PROOF_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
-            temperature=0.0,
+            use_extended_thinking=self._prover_config.use_extended_thinking,
             use_cache=True,
         )
         tokens.input_tokens += response.token_usage.input_tokens
@@ -273,12 +300,13 @@ class RecursiveProver(BaseAgent):
         compile_code = (self._lean_preamble + "\n\n" + proof_code) if self._lean_preamble else proof_code
         compilation = self._repl.execute(compile_code)
 
+        errors_str = "\n".join(compilation.errors or [])
         uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
         if compilation.compilation_status == CompilationStatus.OK and not uses_sorry:
             node.proof_code = proof_code
-            return True
+            return True, proof_code, ""
 
-        return False
+        return False, proof_code, errors_str
 
     def _diagnose_failure(
         self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage

@@ -66,6 +66,7 @@ class RecursiveProver(BaseAgent):
     """Proves a lemma tree using parent-before-children strategy."""
 
     _MAX_TOTAL_NODES = 50
+    _COMPLEXITY_DECOMPOSE_THRESHOLD = 0.7
 
     def __init__(
         self,
@@ -157,6 +158,15 @@ class RecursiveProver(BaseAgent):
 
         children = tree.get_children(node_id)
         if not children:
+            score = self._score_complexity(node)
+            if (
+                score > self._COMPLEXITY_DECOMPOSE_THRESHOLD
+                and node.depth < self._max_depth - 1
+                and self._breakdown is not None
+                and self._total_nodes < self._MAX_TOTAL_NODES
+            ):
+                if self._decompose_stuck_leaf(tree, node, tokens):
+                    return self._prove_parent(tree, node, tokens)
             return self._prove_leaf(tree, node, tokens)
 
         return self._prove_parent(tree, node, tokens)
@@ -560,6 +570,36 @@ class RecursiveProver(BaseAgent):
             steps=len(sketch.proof_steps),
         )
         return nl_context, tactic_hints
+
+    _QUANTIFIER_TOKENS = re.compile(r'∀|∃|forall|exists')
+    _CONNECTIVE_TOKENS = re.compile(r'∧|∨|→|↔|¬|/\\|\\/|->|<->|¬')
+    _UPPERCASE_IDENT = re.compile(r'\b[A-Z][A-Za-z0-9_]+')
+    _HAVE_LET_TOKENS = re.compile(r'\bhave\b|\blet\b')
+
+    def _score_complexity(self, node: ProofNode) -> float:
+        """Score the syntactic complexity of a Lean statement (0–1)."""
+        stmt = node.statement_lean
+        if not stmt:
+            node.complexity_score = 0.0
+            return 0.0
+
+        stmt_len = max(len(stmt), 1)
+        quantifier_density = min(1.0, len(self._QUANTIFIER_TOKENS.findall(stmt)) / (stmt_len / 50))
+        connective_depth = min(1.0, len(self._CONNECTIVE_TOKENS.findall(stmt)) / (stmt_len / 40))
+        length_factor = min(1.0, stmt_len / 500)
+        type_refs = min(1.0, len(self._UPPERCASE_IDENT.findall(stmt)) / 10)
+        nested_have = min(1.0, len(self._HAVE_LET_TOKENS.findall(stmt)) / 5)
+
+        score = (
+            0.3 * quantifier_density
+            + 0.2 * connective_depth
+            + 0.2 * length_factor
+            + 0.15 * type_refs
+            + 0.15 * nested_have
+        )
+        score = max(0.0, min(1.0, score))
+        node.complexity_score = score
+        return score
 
     _MAX_DECOMPOSITION_CHILDREN = 5
 

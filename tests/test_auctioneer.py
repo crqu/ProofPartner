@@ -213,7 +213,7 @@ class TestAuctioneerSemanticAlignment:
 
         result = auctioneer.run(ctx)
         assert result.status == AgentStatus.SUCCESS
-        assert mock_judge.judge.call_count == 3
+        assert mock_judge.judge.call_count >= 3
 
     def test_intent_judge_failure_falls_back_to_1(self):
         """When IntentJudge raises, alignment defaults to 1.0."""

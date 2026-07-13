@@ -74,6 +74,7 @@ class ProofNode(BaseModel):
         default=None,
         description="Tactic-granularity proof sketch (3-5 intermediate steps)",
     )
+    complexity_score: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class LemmaTree(BaseModel):
@@ -208,4 +209,5 @@ class ProofPipelineResult(BaseModel):
     claim_check_passed: bool | None = None
     failure_stage: str | None = None
     failure_reason: str | None = None
+    backtrack_stages: list[str] = Field(default_factory=list)
     total_token_usage: TokenUsage = Field(default_factory=TokenUsage)

@@ -119,6 +119,8 @@ class ProofPipeline:
         self._total_tokens.cache_creation_input_tokens += usage.cache_creation_input_tokens
         self._total_tokens.cache_read_input_tokens += usage.cache_read_input_tokens
 
+    _MAX_BACKTRACK_ATTEMPTS = 2
+
     _DRO_KEYWORDS = frozenset([
         "wasserstein", "coupling", "distributionally robust",
         "probability measure", "transport cost",
@@ -146,6 +148,7 @@ class ProofPipeline:
         pipeline_start = time.monotonic()
         self._statement_nl = statement_nl
         self._lean_preamble = self._detect_lean_preamble(statement_nl)
+        self._backtrack_counts: dict[str, int] = {}
         log.info("proof_pipeline_start", statement_len=len(lean_statement))
 
         self._notify_progress("Proof Search", "Starting proof search")
@@ -331,9 +334,44 @@ class ProofPipeline:
                     weak_feedback, pipeline_start,
                     nl_proof_context=nl_sketch,
                     tactic_hints=tactic_hints,
+                    existing_tree=recursive_result.lemma_tree,
                 )
                 if retried is not None:
                     return retried
+
+            backtrack_target = self._classify_backtrack_target(recursive_result)
+            if (
+                backtrack_target
+                and self._backtrack_counts.get(backtrack_target, 0)
+                < self._MAX_BACKTRACK_ATTEMPTS
+            ):
+                self._backtrack_counts[backtrack_target] = (
+                    self._backtrack_counts.get(backtrack_target, 0) + 1
+                )
+                log.info(
+                    "proof_pipeline_backtracking",
+                    target=backtrack_target,
+                    attempt=self._backtrack_counts[backtrack_target],
+                )
+
+                if backtrack_target == "type_formalization":
+                    backtrack_result = self._backtrack_to_type_formalization(
+                        lean_statement, statement_nl, search_result,
+                        recursive_result, nl_sketch, tactic_hints,
+                        pipeline_start,
+                    )
+                    if backtrack_result is not None:
+                        backtrack_result.backtrack_stages.append("type_formalization")
+                        return backtrack_result
+
+                elif backtrack_target == "nl_proof":
+                    backtrack_result = self._backtrack_to_nl_proof(
+                        lean_statement, statement_nl, search_result,
+                        recursive_result, pipeline_start,
+                    )
+                    if backtrack_result is not None:
+                        backtrack_result.backtrack_stages.append("nl_proof")
+                        return backtrack_result
 
             return ProofPipelineResult(
                 statement=lean_statement,
@@ -430,7 +468,8 @@ class ProofPipeline:
             failure_reason="Proof search agent returned no result",
         )
 
-    _MAX_NL_CRITIC_ITERATIONS = 3
+    _MAX_NL_CRITIC_SAFETY_CAP = 8
+    _NL_CRITIC_STALL_WINDOW = 2
 
     def _run_nl_proof_stage(
         self,
@@ -452,7 +491,9 @@ class ProofPipeline:
             return None
 
         critic = ProofCritic(llm_client=self._llm)
-        for iteration in range(self._MAX_NL_CRITIC_ITERATIONS):
+        stall_count = 0
+        prev_issue_count: int | None = None
+        for iteration in range(self._MAX_NL_CRITIC_SAFETY_CAP):
             critique = critic.audit_nl_proof(sketch, lean_statement)
             self._accumulate_tokens(critique.token_usage)
 
@@ -460,10 +501,25 @@ class ProofPipeline:
                 log.info("nl_proof_stage_passed", iterations=iteration + 1)
                 break
 
+            current_count = len(critique.issues)
+            if prev_issue_count is not None and current_count >= prev_issue_count:
+                stall_count += 1
+            else:
+                stall_count = 0
+            prev_issue_count = current_count
+
+            if stall_count >= self._NL_CRITIC_STALL_WINDOW:
+                log.info(
+                    "nl_proof_critic_stalled",
+                    iteration=iteration + 1,
+                    issues=current_count,
+                )
+                break
+
             log.info(
                 "nl_proof_stage_critique",
                 iteration=iteration + 1,
-                issues=len(critique.issues),
+                issues=current_count,
             )
 
             sketch, regen_tokens = self._nl_prover.generate_proof(
@@ -712,6 +768,81 @@ class ProofPipeline:
                 )
         return issues
 
+    def _graft_subtree(
+        self,
+        parent_tree: LemmaTree,
+        target_node_id: str,
+        sub_tree: LemmaTree,
+    ) -> bool:
+        """Graft a sub-tree onto a target node, remapping IDs to avoid collision."""
+        target_node = parent_tree.get_node(target_node_id)
+        if not target_node:
+            return False
+
+        child_nodes = [
+            n for nid, n in sub_tree.nodes.items() if nid != sub_tree.root_id
+        ]
+        if not child_nodes:
+            return False
+
+        from agentic_research.models.proof import ProofNode
+
+        new_children: list[str] = []
+        for child in child_nodes:
+            child_id = f"{target_node_id}_{child.node_id}"
+            new_node = ProofNode(
+                node_id=child_id,
+                statement_nl=child.statement_nl,
+                statement_lean=child.statement_lean,
+                parent_id=target_node_id,
+                depth=target_node.depth + 1,
+            )
+            parent_tree.nodes[child_id] = new_node
+            new_children.append(child_id)
+
+        target_node.children = new_children
+        target_node.status = NodeStatus.PENDING
+        target_node.failure_diagnosis = None
+        target_node.proof_code = None
+
+        parent_tree.topological_order = new_children + parent_tree.topological_order
+
+        log.info(
+            "graft_subtree_done",
+            target=target_node_id,
+            new_children=len(new_children),
+        )
+        return True
+
+    def _run_lemma_leanifier_selective(
+        self,
+        tree: LemmaTree,
+        node_ids: list[str],
+        tactic_hints: str = "",
+    ) -> LemmaTree | None:
+        """Leanify only a subset of nodes, leaving existing nodes untouched."""
+        agent = LemmaLeanifier(
+            llm_client=self._llm,
+            lean_repl=self._repl,
+            lean_preamble=self._lean_preamble,
+            prebuilt_axioms=self._prebuilt_axioms,
+            axiom_keywords=self._axiom_keywords,
+            lean_search=self._search,
+        )
+
+        for node_id in node_ids:
+            node = tree.get_node(node_id)
+            if not node or node.statement_lean:
+                continue
+            parent = tree.get_node(node.parent_id) if node.parent_id else None
+            parent_stmt = parent.statement_lean if parent else ""
+            lean_code, usage = agent.leanify_single_node(node, parent_stmt)
+            self._accumulate_tokens(usage)
+            if lean_code:
+                node.statement_lean = lean_code
+
+        return tree
+
     def _retry_on_weak_children(
         self,
         lean_statement: str,
@@ -721,8 +852,113 @@ class ProofPipeline:
         pipeline_start: float,
         nl_proof_context: NLProofSketch | None = None,
         tactic_hints: str = "",
+        existing_tree: LemmaTree | None = None,
     ) -> ProofPipelineResult | None:
-        """Retry lemma breakdown when WEAK_CHILD_LEMMA is detected."""
+        """Retry via targeted subtree re-breakdown, falling back to full re-breakdown."""
+        if existing_tree is not None:
+            targeted_result = self._retry_targeted_subtrees(
+                lean_statement, statement_nl, search_result,
+                weak_feedback, pipeline_start, existing_tree,
+                nl_proof_context=nl_proof_context,
+                tactic_hints=tactic_hints,
+            )
+            if targeted_result is not None:
+                return targeted_result
+
+        return self._retry_full_rebreakdown(
+            lean_statement, statement_nl, search_result,
+            weak_feedback, pipeline_start,
+            nl_proof_context=nl_proof_context,
+            tactic_hints=tactic_hints,
+        )
+
+    def _retry_targeted_subtrees(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+        search_result: ProofSearchResult,
+        weak_feedback: list[CritiqueIssue],
+        pipeline_start: float,
+        existing_tree: LemmaTree,
+        nl_proof_context: NLProofSketch | None = None,
+        tactic_hints: str = "",
+    ) -> ProofPipelineResult | None:
+        """Re-break down only the weak children, grafting results back."""
+        weak_node_ids = [
+            issue.node_id for issue in weak_feedback
+            if existing_tree.get_node(issue.node_id)
+        ]
+        if not weak_node_ids:
+            return None
+
+        any_grafted = False
+        new_node_ids: list[str] = []
+        for weak_id in weak_node_ids:
+            weak_node = existing_tree.get_node(weak_id)
+            if not weak_node:
+                continue
+
+            sub_tree = self._run_lemma_breakdown(
+                weak_node.statement_lean or lean_statement,
+                weak_node.statement_nl or statement_nl,
+                search_result,
+                nl_proof_context=nl_proof_context,
+                tactic_hints=tactic_hints,
+            )
+            if sub_tree is None:
+                continue
+
+            if self._graft_subtree(existing_tree, weak_id, sub_tree):
+                any_grafted = True
+                new_node_ids.extend(existing_tree.get_node(weak_id).children)
+
+        if not any_grafted:
+            return None
+
+        if new_node_ids:
+            self._run_lemma_leanifier_selective(
+                existing_tree, new_node_ids, tactic_hints=tactic_hints,
+            )
+
+        self._notify_progress("Recursive Prover", "Re-proving after subtree graft")
+        recursive_result = self._run_recursive_prover(existing_tree)
+
+        if recursive_result.proved and recursive_result.lemma_tree:
+            self._notify_progress("Finalization", "Assembling final proof")
+            final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
+            if final_proof:
+                if self._use_claim_check:
+                    passed = self._run_claim_check(lean_statement, final_proof)
+                    if not passed:
+                        return None
+
+                log.info(
+                    "proof_pipeline_subtree_graft_success",
+                    elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
+                )
+                return ProofPipelineResult(
+                    statement=lean_statement,
+                    proved=True,
+                    final_proof=final_proof,
+                    search_result=search_result,
+                    recursive_result=recursive_result,
+                    claim_check_passed=True,
+                    total_token_usage=self._total_tokens,
+                )
+
+        return None
+
+    def _retry_full_rebreakdown(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+        search_result: ProofSearchResult,
+        weak_feedback: list[CritiqueIssue],
+        pipeline_start: float,
+        nl_proof_context: NLProofSketch | None = None,
+        tactic_hints: str = "",
+    ) -> ProofPipelineResult | None:
+        """Full-root re-breakdown fallback."""
         for attempt in range(self._MAX_WEAK_CHILD_RETRIES):
             log.info(
                 "proof_pipeline_weak_child_retry",
@@ -796,6 +1032,194 @@ class ProofPipeline:
             weak_feedback = new_feedback
 
         return None
+
+    _BACKTRACK_TYPE_KEYWORDS = frozenset([
+        "undefined structure", "undefined type", "unknown identifier",
+        "type mismatch", "expected type", "has type", "definition",
+        "structure", "inductive", "class", "instance",
+    ])
+    _BACKTRACK_NL_KEYWORDS = frozenset([
+        "stuck_goal", "logical gap", "missing step",
+    ])
+
+    def _classify_backtrack_target(
+        self, recursive_result: RecursiveProofResult,
+    ) -> str | None:
+        """Analyze failure diagnoses to decide which stage to backtrack to."""
+        if not recursive_result.lemma_tree:
+            return None
+
+        failed_nodes = [
+            n for n in recursive_result.lemma_tree.nodes.values()
+            if n.failure_diagnosis is not None
+        ]
+        if not failed_nodes:
+            return None
+
+        type_signals = 0
+        stuck_signals = 0
+        for node in failed_nodes:
+            diag = node.failure_diagnosis
+            assert diag is not None
+            combined = f"{diag.description} {diag.suggested_fix}".lower()
+            if any(kw in combined for kw in self._BACKTRACK_TYPE_KEYWORDS):
+                type_signals += 1
+            if diag.failure_type == FailureType.STUCK_GOAL:
+                stuck_signals += 1
+
+        if type_signals > 0:
+            return "type_formalization"
+        if stuck_signals > len(failed_nodes) // 2 and self._use_nl_proof_stage:
+            return "nl_proof"
+        return None
+
+    def _backtrack_to_type_formalization(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+        search_result: ProofSearchResult,
+        recursive_result: RecursiveProofResult,
+        nl_sketch: NLProofSketch | None,
+        tactic_hints: str,
+        pipeline_start: float,
+    ) -> ProofPipelineResult | None:
+        """Re-run type formalization with failure context, then re-enter decomposition."""
+        failure_context = []
+        if recursive_result.lemma_tree:
+            for n in recursive_result.lemma_tree.nodes.values():
+                if n.failure_diagnosis:
+                    failure_context.append(n.failure_diagnosis.description)
+
+        augmented_nl = (
+            f"{statement_nl}\n\n[Prior type formalization failed]\n"
+            + "\n".join(failure_context[:5])
+        )
+
+        self._notify_progress("Backtrack", "Re-running type formalization")
+        type_defs = self._run_type_first_formalization(augmented_nl)
+        if not type_defs:
+            return None
+
+        self._lean_preamble = (
+            f"{self._lean_preamble}\n\n{type_defs}"
+            if self._lean_preamble
+            else type_defs
+        )
+
+        if nl_sketch is None and self._nl_prover and self._use_nl_proof_stage:
+            nl_sketch = self._run_nl_proof_stage(lean_statement, statement_nl)
+
+        bt_tactic_hints = tactic_hints
+        if nl_sketch and nl_sketch.proof_steps:
+            detailer = ProofDetailer(llm_client=self._llm)
+            bt_tactic_hints = detailer.detail_sketch(nl_sketch)
+            self._accumulate_tokens(detailer.cumulative_tokens)
+
+        tree = self._run_lemma_breakdown(
+            lean_statement, statement_nl, search_result,
+            nl_proof_context=nl_sketch,
+            tactic_hints=bt_tactic_hints,
+        )
+        if tree is None:
+            return None
+
+        tree = self._run_lemma_leanifier(tree, tactic_hints=bt_tactic_hints)
+        if tree is None:
+            return None
+
+        bt_result = self._run_recursive_prover(tree)
+        if not bt_result.proved or not bt_result.lemma_tree:
+            return None
+
+        final_proof = self._run_flatten_finalize(bt_result.lemma_tree)
+        if not final_proof:
+            return None
+
+        if self._use_claim_check and not self._run_claim_check(lean_statement, final_proof):
+            return None
+
+        log.info(
+            "proof_pipeline_backtrack_type_success",
+            elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
+        )
+        return ProofPipelineResult(
+            statement=lean_statement,
+            proved=True,
+            final_proof=final_proof,
+            search_result=search_result,
+            recursive_result=bt_result,
+            claim_check_passed=True,
+            total_token_usage=self._total_tokens,
+        )
+
+    def _backtrack_to_nl_proof(
+        self,
+        lean_statement: str,
+        statement_nl: str,
+        search_result: ProofSearchResult,
+        recursive_result: RecursiveProofResult,
+        pipeline_start: float,
+    ) -> ProofPipelineResult | None:
+        """Re-run NL proof stage with failure context, then re-enter decomposition."""
+        if not self._nl_prover:
+            return None
+
+        failure_feedback = []
+        if recursive_result.lemma_tree:
+            for n in recursive_result.lemma_tree.nodes.values():
+                if n.failure_diagnosis:
+                    failure_feedback.append(n.failure_diagnosis.description)
+
+        augmented_nl = (
+            f"{statement_nl}\n\n[Prior proof attempt feedback]\n"
+            + "\n".join(failure_feedback[:5])
+        )
+
+        self._notify_progress("Backtrack", "Re-running NL proof stage")
+        nl_sketch = self._run_nl_proof_stage(lean_statement, augmented_nl)
+        if nl_sketch is None or not nl_sketch.proof_steps:
+            return None
+
+        detailer = ProofDetailer(llm_client=self._llm)
+        tactic_hints = detailer.detail_sketch(nl_sketch)
+        self._accumulate_tokens(detailer.cumulative_tokens)
+
+        tree = self._run_lemma_breakdown(
+            lean_statement, statement_nl, search_result,
+            nl_proof_context=nl_sketch,
+            tactic_hints=tactic_hints,
+        )
+        if tree is None:
+            return None
+
+        tree = self._run_lemma_leanifier(tree, tactic_hints=tactic_hints)
+        if tree is None:
+            return None
+
+        bt_result = self._run_recursive_prover(tree)
+        if not bt_result.proved or not bt_result.lemma_tree:
+            return None
+
+        final_proof = self._run_flatten_finalize(bt_result.lemma_tree)
+        if not final_proof:
+            return None
+
+        if self._use_claim_check and not self._run_claim_check(lean_statement, final_proof):
+            return None
+
+        log.info(
+            "proof_pipeline_backtrack_nl_success",
+            elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
+        )
+        return ProofPipelineResult(
+            statement=lean_statement,
+            proved=True,
+            final_proof=final_proof,
+            search_result=search_result,
+            recursive_result=bt_result,
+            claim_check_passed=True,
+            total_token_usage=self._total_tokens,
+        )
 
     def _run_flatten_finalize(self, tree: LemmaTree) -> str | None:
         agent = FlattenFinalize(llm_client=self._llm, lean_repl=self._repl)

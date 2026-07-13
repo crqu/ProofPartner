@@ -217,8 +217,7 @@ class TestAdaptiveThinking:
         )
 
         call_kwargs = client._client.messages.create.call_args[1]
-        assert call_kwargs["thinking"]["type"] == "adaptive"
-        assert call_kwargs["thinking"]["budget_tokens"] == 10000
+        assert call_kwargs["thinking"] == {"type": "adaptive"}
 
     def test_no_thinking_when_disabled(self):
         client = self._make_client()

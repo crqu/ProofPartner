@@ -140,10 +140,7 @@ class LLMClient:
 
         if use_extended_thinking:
             kwargs["temperature"] = 1
-            kwargs["thinking"] = {
-                "type": "adaptive",
-                "budget_tokens": thinking_budget,
-            }
+            kwargs["thinking"] = {"type": "adaptive"}
         else:
             kwargs["temperature"] = resolved_temp
 

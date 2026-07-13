@@ -164,7 +164,7 @@ class TestLLMClientThinkingBudgetGuard:
 
         call_kwargs = client._client.messages.create.call_args[1]
         assert call_kwargs["max_tokens"] == 10000 + 4096
-        assert call_kwargs["max_tokens"] > call_kwargs["thinking"]["budget_tokens"]
+        assert call_kwargs["thinking"] == {"type": "adaptive"}
 
     def test_no_adjustment_when_max_tokens_already_sufficient(self):
         client = self._make_client(max_tokens=20000)

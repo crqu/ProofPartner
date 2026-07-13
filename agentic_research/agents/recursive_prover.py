@@ -73,6 +73,7 @@ class RecursiveProver(BaseAgent):
         self._max_depth = max_depth
         self._max_retries_per_node = max_retries_per_node
         self._lean_preamble = lean_preamble
+        self._nl_proof_hint = ""
 
     def _execute(self, context: AgentContext) -> AgentResult:
         tree_data = context.metadata.get("lemma_tree")
@@ -85,6 +86,9 @@ class RecursiveProver(BaseAgent):
 
         tree = LemmaTree.model_validate(tree_data)
         total_tokens = TokenUsage()
+
+        nl_ctx = context.metadata.get("nl_proof_context")
+        self._nl_proof_hint = self._format_nl_hint(nl_ctx) if nl_ctx else ""
 
         self._prove_node(tree, tree.root_id, total_tokens)
 
@@ -138,6 +142,25 @@ class RecursiveProver(BaseAgent):
 
         return self._prove_parent(tree, node, tokens)
 
+    @staticmethod
+    def _format_nl_hint(nl_ctx: dict) -> str:
+        """Format NL proof context into a hint for the prover."""
+        lines = ["\n## Proof Strategy (from natural language reasoning)"]
+        strategy = nl_ctx.get("overall_strategy", "")
+        if strategy:
+            lines.append(f"Strategy: {strategy}")
+        for step in nl_ctx.get("proof_steps", []):
+            claim = step.get("claim", "")
+            reasoning = step.get("reasoning", "")
+            if claim:
+                lines.append(f"- {claim}: {reasoning}")
+        for lemma in nl_ctx.get("key_lemmas", []):
+            lines.append(f"- Key lemma: {lemma}")
+        lines.append(
+            "\nUse this mathematical reasoning to guide your Lean 4 tactic choices."
+        )
+        return "\n".join(lines)
+
     def _prove_leaf(self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage) -> bool:
         """Prove a leaf node directly using the iterative prover."""
         log.info("recursive_prover_leaf", node_id=node.node_id)
@@ -147,7 +170,10 @@ class RecursiveProver(BaseAgent):
             lean_repl=self._repl,
             config=self._prover_config,
         )
-        ctx = AgentContext(task=node.statement_lean)
+        task = node.statement_lean
+        if self._nl_proof_hint:
+            task = task + "\n" + self._nl_proof_hint
+        ctx = AgentContext(task=task)
         result = prover.run(ctx)
 
         tokens.input_tokens += result.token_usage.input_tokens
@@ -259,6 +285,9 @@ class RecursiveProver(BaseAgent):
             parent_statement=node.statement_lean,
             child_declarations=child_decls,
         )
+
+        if self._nl_proof_hint:
+            user_content += self._nl_proof_hint
 
         response = self._llm.complete(
             system=PARENT_PROOF_SYSTEM,

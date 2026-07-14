@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-812%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-877%20passed-brightgreen.svg)]()
 
 An agentic mathematical research partner that transforms rough mathematical ideas into formal Lean 4 conjectures and discovers proofs.
 

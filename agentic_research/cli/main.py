@@ -758,6 +758,147 @@ def resume_cmd(
     console.print(f"\n[dim]Session: {result.session_id}[/dim]")
 
 
+@cli.command("formalize-paper")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--extract-only", is_flag=True, help="Extract without formalizing")
+@click.option("--model", "cmd_model", default=None, help="Override LLM model")
+@click.option("--budget", type=float, default=50.0, help="Cost budget in USD (default: $50.00)")
+@click.option("--theorem-index", type=int, default=0, help="Index of main theorem to formalize")
+@click.pass_context
+def formalize_paper_cmd(
+    ctx: click.Context,
+    path: str,
+    extract_only: bool,
+    cmd_model: str | None,
+    budget: float,
+    theorem_index: int,
+) -> None:
+    """Extract formalization targets from a research paper.
+
+    Reads a .tex file as plain text or a .pdf via pymupdf, then runs
+    the Extractor agent to identify theorems, definitions, lemmas, and
+    prior work.
+    """
+    from agentic_research.agents.extractor import Extractor
+
+    file_path = Path(path)
+    suffix = file_path.suffix.lower()
+
+    if suffix == ".tex":
+        paper_text = file_path.read_text(errors="replace")
+    elif suffix == ".pdf":
+        try:
+            import pymupdf  # noqa: F811
+
+            doc = pymupdf.open(str(file_path))
+            paper_text = "\n".join(page.get_text() for page in doc)
+            doc.close()
+        except ImportError:
+            console.print(
+                "[red]Error:[/red] PDF support requires pymupdf. "
+                "Install with: pip install 'agentic-research[paper]'"
+            )
+            sys.exit(1)
+    else:
+        console.print(f"[red]Error:[/red] Unsupported file type '{suffix}'. Use .tex or .pdf")
+        sys.exit(1)
+
+    if not paper_text.strip():
+        console.print("[red]Error:[/red] File is empty or unreadable.")
+        sys.exit(1)
+
+    model = cmd_model or ctx.obj.get("model")
+    cost_tracker = _create_cost_tracker()
+
+    try:
+        llm = _create_llm_client(model=model)
+    except Exception as e:
+        console.print(f"[red]Setup error:[/red] {e}")
+        sys.exit(1)
+
+    extractor = Extractor(llm_client=llm)
+
+    with console.status(f"{_cost_display(cost_tracker, budget)} Extracting from {file_path.name}..."):
+        result = extractor.extract(paper_text)
+        _record_agent_tokens(cost_tracker, extractor)
+
+    if result.paper_title:
+        console.print(f"\n[bold]Paper:[/bold] {result.paper_title}")
+    if result.paper_domain:
+        console.print(f"[bold]Domain:[/bold] {result.paper_domain}")
+
+    if result.theorems:
+        thm_table = Table(title="Theorems")
+        thm_table.add_column("#", style="bold", width=3)
+        thm_table.add_column("Statement", min_width=40)
+        thm_table.add_column("Main", justify="center", width=5)
+        thm_table.add_column("Ref", width=10)
+        for i, thm in enumerate(result.theorems):
+            main_mark = "Y" if thm.is_main else ""
+            stmt = thm.statement[:100] + ("..." if len(thm.statement) > 100 else "")
+            thm_table.add_row(str(i), stmt, main_mark, thm.section_ref)
+        console.print(thm_table)
+
+    if result.definitions:
+        def_table = Table(title="Definitions")
+        def_table.add_column("Name", style="bold", min_width=15)
+        def_table.add_column("Statement", min_width=30)
+        def_table.add_column("Mathlib", justify="center", width=7)
+        for defn in result.definitions:
+            stmt = defn.informal_statement[:80] + ("..." if len(defn.informal_statement) > 80 else "")
+            def_table.add_row(defn.name, stmt, "Y" if defn.in_mathlib else "")
+        console.print(def_table)
+
+    if result.lemmas:
+        lem_table = Table(title="Lemmas")
+        lem_table.add_column("Name", style="bold", min_width=15)
+        lem_table.add_column("Statement", min_width=30)
+        lem_table.add_column("Supports", width=20)
+        for lem in result.lemmas:
+            stmt = lem.informal_statement[:80] + ("..." if len(lem.informal_statement) > 80 else "")
+            lem_table.add_row(lem.name, stmt, lem.used_in_proof_of)
+        console.print(lem_table)
+
+    if result.prior_work:
+        pw_table = Table(title="Prior Work")
+        pw_table.add_column("Citation", style="bold", min_width=20)
+        pw_table.add_column("Result", min_width=30)
+        pw_table.add_column("Axiom", justify="center", width=6)
+        for pw in result.prior_work:
+            stmt = pw.result_statement[:80] + ("..." if len(pw.result_statement) > 80 else "")
+            pw_table.add_row(pw.citation, stmt, "Y" if pw.axiom_candidate else "")
+        console.print(pw_table)
+
+    summary_parts = [
+        f"{len(result.theorems)} theorems",
+        f"{len(result.definitions)} definitions",
+        f"{len(result.lemmas)} lemmas",
+        f"{len(result.prior_work)} prior work",
+    ]
+    console.print(f"\n[dim]Extracted: {', '.join(summary_parts)}[/dim]")
+
+    _print_cost_summary(cost_tracker, budget)
+
+    if extract_only:
+        return
+
+    if not result.theorems:
+        console.print("[yellow]No theorems found — cannot proceed to formalization.[/yellow]")
+        return
+
+    if theorem_index >= len(result.theorems):
+        console.print(
+            f"[red]Error:[/red] --theorem-index {theorem_index} is out of range "
+            f"(found {len(result.theorems)} theorems)."
+        )
+        sys.exit(1)
+
+    console.print(
+        "\n[yellow]Full formalization pipeline not yet wired — "
+        "use --extract-only for now.[/yellow]"
+    )
+
+
 @cli.command("status")
 def status_cmd() -> None:
     """Show current session state and cost summary."""

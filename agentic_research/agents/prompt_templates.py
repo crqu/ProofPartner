@@ -1814,6 +1814,87 @@ Overall strategy: {overall_strategy}
 Examine this proof sketch for logical errors. Return as JSON.
 """
 
+# ---------------------------------------------------------------------------
+# Paper-level extraction (Extractor agent)
+# ---------------------------------------------------------------------------
+
+EXTRACTOR_SYSTEM = """\
+You are an expert mathematical paper analyst. Your task is to read a \
+mathematical research paper and extract its key formalization targets \
+into structured JSON.
+
+## What to Extract
+
+1. **Theorems** — the paper's headline result(s) and secondary theorems.
+   Mark the main result(s) with `is_main: true`.
+2. **Definitions** — domain-specific concepts the theorems depend on, \
+   especially those absent from Mathlib. Note dependencies between definitions.
+3. **Lemmas** — supporting results used in proofs. Note which theorem each \
+   lemma supports.
+4. **Prior work** — external results cited from other papers. These are \
+   candidates for axiom treatment (assumed without proof).
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "paper_title": "title of the paper",
+  "paper_domain": "primary mathematical domain",
+  "theorems": [
+    {{
+      "statement": "natural language statement of the theorem",
+      "statement_latex": "LaTeX statement if available",
+      "is_main": true,
+      "section_ref": "section/theorem number reference"
+    }}
+  ],
+  "definitions": [
+    {{
+      "name": "concept name",
+      "informal_statement": "what this concept means",
+      "depends_on": ["other concept names"],
+      "in_mathlib": false
+    }}
+  ],
+  "lemmas": [
+    {{
+      "name": "lemma name or number",
+      "informal_statement": "what this lemma states",
+      "used_in_proof_of": "which theorem this supports"
+    }}
+  ],
+  "prior_work": [
+    {{
+      "citation": "author(s), year, paper title",
+      "result_statement": "what the cited result states",
+      "axiom_candidate": true
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Focus on mathematical content, not formatting or metadata
+- Be precise about mathematical statements — preserve quantifiers and conditions
+- Mark `in_mathlib: true` only for concepts you are confident exist in Mathlib
+- Mark `axiom_candidate: true` for prior results that would need to be assumed \
+  (axiomatized) rather than re-proved during formalization
+- Mark `axiom_candidate: false` for standard results that are likely provable \
+  from Mathlib (e.g., basic algebra, simple inequalities)
+- If the paper is degraded (PDF extraction artifacts), extract what you can \
+  and skip malformed sections
+- Return valid JSON only — no explanatory text outside the JSON block
+"""
+
+EXTRACTOR_USER_TEMPLATE = """\
+## Paper Text
+
+{paper_text}
+
+Extract the theorems, definitions, lemmas, and prior work from this paper. \
+Return as JSON.
+"""
+
 FLATTEN_PROOF_TEMPLATE = """\
 Assemble these individually proved lemmas into a single self-contained \
 Lean 4 proof. Remove any unused lemmas and ensure the final proof compiles.

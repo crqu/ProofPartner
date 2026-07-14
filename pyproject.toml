@@ -33,6 +33,9 @@ lean = [
 google = [
     "google-genai>=1.0",
 ]
+paper = [
+    "pymupdf>=1.24",
+]
 
 [project.scripts]
 agentic-research = "agentic_research.cli.main:cli"

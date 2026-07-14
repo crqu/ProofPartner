@@ -74,9 +74,10 @@ class TestAgentResult:
 class TestProverConfig:
     def test_defaults(self):
         config = ProverConfig()
-        assert config.max_iterations == 5
+        assert config.max_iterations == 2
         assert config.model == "claude-opus-4-6-20250616"
         assert config.temperature == 0.0
+        assert config.max_tokens == 16384
 
     def test_custom(self):
         config = ProverConfig(max_iterations=10, temperature=0.5)
@@ -121,6 +122,75 @@ class TestProverResult:
             failure_reason="exhausted iterations",
         )
         assert not result.proved
+
+
+# ---------------------------------------------------------------------------
+# agents/llm_client.py — max_tokens vs thinking_budget guard
+# ---------------------------------------------------------------------------
+
+
+class TestLLMClientThinkingBudgetGuard:
+    """Verify LLMClient.complete() auto-adjusts max_tokens when thinking_budget exceeds it."""
+
+    def _make_client(self, max_tokens: int = 4096):
+        with patch("anthropic.Anthropic"):
+            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+                from agentic_research.agents.llm_client import LLMClient
+
+                return LLMClient(max_tokens=max_tokens)
+
+    def _mock_response(self):
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text="ok")]
+        resp.stop_reason = "end_turn"
+        resp.model = "claude-opus-4-6-20250616"
+        resp.usage = MagicMock(
+            input_tokens=10,
+            output_tokens=5,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+        return resp
+
+    def test_auto_adjusts_when_thinking_budget_exceeds_max_tokens(self):
+        client = self._make_client(max_tokens=4096)
+        client._client.messages.create = MagicMock(return_value=self._mock_response())
+
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            use_extended_thinking=True,
+            thinking_budget=10000,
+        )
+
+        call_kwargs = client._client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 10000 + 4096
+        assert call_kwargs["thinking"] == {"type": "adaptive"}
+
+    def test_no_adjustment_when_max_tokens_already_sufficient(self):
+        client = self._make_client(max_tokens=20000)
+        client._client.messages.create = MagicMock(return_value=self._mock_response())
+
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            use_extended_thinking=True,
+            thinking_budget=10000,
+        )
+
+        call_kwargs = client._client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 20000
+
+    def test_no_adjustment_without_extended_thinking(self):
+        client = self._make_client(max_tokens=4096)
+        client._client.messages.create = MagicMock(return_value=self._mock_response())
+
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            use_extended_thinking=False,
+            thinking_budget=10000,
+        )
+
+        call_kwargs = client._client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 4096
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +724,7 @@ class TestIterativeProver:
         llm = _make_mock_llm_client([])
 
         prover = IterativeProver(llm_client=llm, lean_repl=repl)
-        assert prover.config.max_iterations == 5
+        assert prover.config.max_iterations == 2
         assert prover.config.model == "claude-opus-4-6-20250616"
         assert prover.name == "iterative_prover"
 

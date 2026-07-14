@@ -11,7 +11,7 @@ def test_eval_config_defaults():
     assert config.thinking_budget == 10000
     assert config.max_critic_retries == 3
     assert config.use_intent_judge is True
-    assert config.timeout_seconds == 1800
+    assert config.timeout_seconds == 600
 
 
 def test_prover_config_from_eval_config():

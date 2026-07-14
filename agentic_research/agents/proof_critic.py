@@ -12,6 +12,8 @@ import json
 from agentic_research.agents.base import BaseAgent
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
+    NL_PROVER_CRITIQUE_SYSTEM,
+    NL_PROVER_CRITIQUE_USER_TEMPLATE,
     PROOF_CRITIC_CONFIRM_TEMPLATE,
     PROOF_CRITIC_SYSTEM,
     PROOF_CRITIC_USER_TEMPLATE,
@@ -28,6 +30,7 @@ from agentic_research.models.proof import (
     CritiqueIssueType,
     CritiqueResult,
     LemmaTree,
+    NLProofSketch,
 )
 
 log = get_logger(__name__)
@@ -203,6 +206,60 @@ class ProofCritic(BaseAgent):
             severity=item.get("severity", "warning"),
             suggested_fix=item.get("suggested_fix", ""),
             confirmed=confirmed,
+        )
+
+    def audit_nl_proof(
+        self,
+        sketch: NLProofSketch,
+        statement: str,
+    ) -> CritiqueResult:
+        """Audit a natural language proof sketch for logical soundness."""
+        total_tokens = TokenUsage()
+
+        assumptions_str = "\n".join(
+            f"- {a}" for a in sketch.assumptions
+        ) or "None stated"
+        key_lemmas_str = "\n".join(
+            f"- {lem}" for lem in sketch.key_lemmas
+        ) or "None"
+        steps_str = ""
+        for i, step in enumerate(sketch.proof_steps, 1):
+            steps_str += f"\n**Step {i}: {step.claim}**\n"
+            steps_str += f"Reasoning: {step.reasoning}\n"
+            if step.sub_claims:
+                for sc in step.sub_claims:
+                    steps_str += f"  - Sub-claim: {sc}\n"
+
+        user_content = NL_PROVER_CRITIQUE_USER_TEMPLATE.format(
+            statement=statement,
+            overall_strategy=sketch.overall_strategy,
+            assumptions=assumptions_str,
+            key_lemmas=key_lemmas_str,
+            proof_steps=steps_str,
+        )
+
+        response = self._llm.complete(
+            system=NL_PROVER_CRITIQUE_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+            temperature=0.3,
+            use_cache=True,
+        )
+        total_tokens.input_tokens += response.token_usage.input_tokens
+        total_tokens.output_tokens += response.token_usage.output_tokens
+
+        issues = self._parse_issues(response.content)
+        has_blocking = any(i.severity == "blocking" for i in issues)
+
+        log.info(
+            "proof_critic_nl_audit_done",
+            issues=len(issues),
+            blocking=has_blocking,
+        )
+
+        return CritiqueResult(
+            issues=issues,
+            passed=not has_blocking,
+            token_usage=total_tokens,
         )
 
     def _describe_tree(self, tree: LemmaTree) -> str:

@@ -74,6 +74,7 @@ class ProofNode(BaseModel):
         default=None,
         description="Tactic-granularity proof sketch (3-5 intermediate steps)",
     )
+    complexity_score: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class LemmaTree(BaseModel):
@@ -180,6 +181,23 @@ class CritiqueResult(BaseModel):
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
+class NLProofStep(BaseModel):
+    """A single step in a natural language proof sketch."""
+
+    claim: str
+    reasoning: str
+    sub_claims: list[str] = Field(default_factory=list)
+
+
+class NLProofSketch(BaseModel):
+    """Structured informal proof produced before Lean formalization."""
+
+    proof_steps: list[NLProofStep] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    key_lemmas: list[str] = Field(default_factory=list)
+    overall_strategy: str = ""
+
+
 class ProofPipelineResult(BaseModel):
     """End-to-end result from the proof pipeline."""
 
@@ -191,4 +209,5 @@ class ProofPipelineResult(BaseModel):
     claim_check_passed: bool | None = None
     failure_stage: str | None = None
     failure_reason: str | None = None
+    backtrack_stages: list[str] = Field(default_factory=list)
     total_token_usage: TokenUsage = Field(default_factory=TokenUsage)

@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentic_research.agents.llm_client import LLMClient
+from agentic_research.agents.nl_prover import NaturalLanguageProver
 from agentic_research.eval.benchmarks import load_minif2f, load_putnam_bench
+from agentic_research.eval.cost import estimate_cost
 from agentic_research.eval.scorer import score_eval_run
 from agentic_research.logging import configure_logging, get_logger
 from agentic_research.models.agents import ProverConfig, TokenUsage
@@ -88,6 +90,10 @@ def _evaluate_proof_discovery(
 
     lean_repl = LeanRepl(ReplConfig(backend=detect_backend()))
     prover_config = ProverConfig(use_extended_thinking=config.use_extended_thinking)
+    nl_prover = NaturalLanguageProver(
+        llm_client=shared.llm_client,
+        prover_config=prover_config,
+    )
     pipeline = ProofPipeline(
         llm_client=shared.llm_client,
         lean_repl=lean_repl,
@@ -95,6 +101,8 @@ def _evaluate_proof_discovery(
         prover_config=prover_config,
         max_critic_retries=config.max_critic_retries,
         use_intent_judge=config.use_intent_judge,
+        nl_prover=nl_prover,
+        use_nl_proof_stage=True,
     )
 
     full_statement = (
@@ -156,7 +164,10 @@ def _evaluate_proof_discovery(
         )
 
     pipeline_result = result_holder[0]
-    token_total = _sum_token_usage(pipeline_result.total_token_usage)
+    usage = pipeline_result.total_token_usage
+    token_total = _sum_token_usage(usage)
+    model = config.model or "claude-opus-4-6"
+    cost = estimate_cost(usage, model)
 
     if pipeline_result.proved:
         log.info("proof_discovery_success", problem=problem.id)
@@ -168,6 +179,11 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             token_usage=token_total,
+            cost_usd=round(cost, 6),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_input_tokens=usage.cache_read_input_tokens,
+            cache_creation_input_tokens=usage.cache_creation_input_tokens,
         )
 
     log.debug("proof_discovery_failure", problem=problem.id, stage=pipeline_result.failure_stage)
@@ -179,6 +195,11 @@ def _evaluate_proof_discovery(
         duration_seconds=duration,
         error_message=pipeline_result.failure_reason,
         token_usage=token_total,
+        cost_usd=round(cost, 6),
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_input_tokens=usage.cache_read_input_tokens,
+        cache_creation_input_tokens=usage.cache_creation_input_tokens,
     )
 
 
@@ -357,6 +378,17 @@ def main() -> None:
             log.info("report_written", path=output)
         else:
             click.echo(report_json)
+
+        agg = report.aggregate
+        proved_costs = [r.cost_usd for r in report.results if r.result == ProofResult.SUCCESS]
+        failed_costs = [r.cost_usd for r in report.results if r.result != ProofResult.SUCCESS]
+        mean_proved = sum(proved_costs) / len(proved_costs) if proved_costs else 0.0
+        mean_failed = sum(failed_costs) / len(failed_costs) if failed_costs else 0.0
+
+        click.echo("\nCost Summary:")
+        click.echo(f"  Total: ${agg.total_cost_usd:.2f} ({agg.total} problems)")
+        click.echo(f"  Per problem: ${agg.mean_cost_usd:.2f} avg (${mean_proved:.2f} proved, ${mean_failed:.2f} failed)")
+        click.echo(f"  Tokens: {agg.total_input_tokens} input, {agg.total_output_tokens} output, {sum(r.cache_read_input_tokens for r in report.results)} cache_read")
 
         success_rate = report.aggregate.pass_rate
         sys.exit(0 if success_rate >= 0.0 else 1)

@@ -25,12 +25,22 @@ from agentic_research.models.agents import (
     TokenUsage,
 )
 from agentic_research.models.proof import LemmaTree, ProofNode
-from agentic_research.models.tools import CompilationStatus
+from agentic_research.models.tools import CompilationStatus, ToolStatus
 from agentic_research.tools.lean_repl import LeanRepl
+from agentic_research.tools.lean_search import LeanSearch
 
 log = get_logger(__name__)
 
 MAX_COMPILE_RETRIES = 3
+
+_STOPWORDS = frozenset([
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "of", "in", "to", "for",
+    "with", "on", "at", "by", "from", "as", "into", "through", "that",
+    "this", "it", "its", "and", "or", "but", "not", "if", "then", "than",
+    "so", "no", "all", "each", "every", "any", "such", "there", "we",
+])
 
 
 def _extract_lean_code(text: str) -> str:
@@ -52,6 +62,7 @@ class LemmaLeanifier(BaseAgent):
         lean_preamble: str | None = None,
         prebuilt_axioms: dict[str, str] | None = None,
         axiom_keywords: dict[str, list[str]] | None = None,
+        lean_search: LeanSearch | None = None,
     ) -> None:
         super().__init__(name="lemma_leanifier", max_retries=1)
         self._llm = llm_client
@@ -60,6 +71,8 @@ class LemmaLeanifier(BaseAgent):
         self._lean_preamble = lean_preamble
         self._prebuilt_axioms = prebuilt_axioms
         self._axiom_keywords = axiom_keywords
+        self._search = lean_search
+        self._search_cache: dict[str, str] = {}
 
     def _compile(self, lean_code: str):
         """Execute lean_code in the REPL, prepending the preamble if set."""
@@ -89,6 +102,7 @@ class LemmaLeanifier(BaseAgent):
             )
 
         tree = LemmaTree.model_validate(tree_data)
+        tactic_hints = context.metadata.get("tactic_hints", "")
         total_tokens = TokenUsage()
         failed_nodes: list[str] = []
 
@@ -103,7 +117,9 @@ class LemmaLeanifier(BaseAgent):
             parent_stmt = parent.statement_lean if parent else ""
             siblings = self._get_sibling_statements(tree, node)
 
-            lean_code, tokens = self._leanify_node(node, parent_stmt, siblings)
+            lean_code, tokens = self._leanify_node(
+                node, parent_stmt, siblings, tactic_hints=tactic_hints
+            )
             total_tokens.input_tokens += tokens.input_tokens
             total_tokens.output_tokens += tokens.output_tokens
 
@@ -121,6 +137,18 @@ class LemmaLeanifier(BaseAgent):
             result=tree.model_dump(),
             token_usage=total_tokens,
             error_message=f"Failed to leanify: {failed_nodes}" if failed_nodes else None,
+        )
+
+    def leanify_single_node(
+        self,
+        node: ProofNode,
+        parent_statement: str,
+        sibling_statements: str = "",
+        tactic_hints: str = "",
+    ) -> tuple[str | None, TokenUsage]:
+        """Translate a single node to Lean 4 — public API for per-node leanification."""
+        return self._leanify_node(
+            node, parent_statement, sibling_statements, tactic_hints=tactic_hints
         )
 
     _MATCH_THRESHOLD = 2
@@ -150,8 +178,42 @@ class LemmaLeanifier(BaseAgent):
             return self._prebuilt_axioms[best_name]
         return None
 
+    def _extract_search_keywords(self, statement: str) -> str:
+        """Extract significant math terms from a natural language statement."""
+        tokens = re.split(r"\s+", statement.strip())
+        keywords = [
+            t.strip(".,;:()[]") for t in tokens
+            if t.strip(".,;:()[]").lower() not in _STOPWORDS
+            and len(t.strip(".,;:()[]")) > 1
+        ]
+        return " ".join(keywords[:5])
+
+    def _search_mathlib(self, query: str) -> str:
+        """Search Mathlib for relevant theorems, with caching."""
+        if not self._search or not query:
+            return ""
+        if query in self._search_cache:
+            return self._search_cache[query]
+
+        result = self._search.execute(query)
+        if result.status != ToolStatus.SUCCESS or not result.entries:
+            return ""
+
+        lines = []
+        for entry in result.entries[:5]:
+            lines.append(f"- {entry.name} : {entry.type_signature}")
+        text = "\n".join(lines)
+        self._search_cache[query] = text
+        log.info("lean_search_for_leanify", query=query, results=len(lines))
+        return text
+
     def _leanify_node(
-        self, node: ProofNode, parent_statement: str, sibling_statements: str
+        self,
+        node: ProofNode,
+        parent_statement: str,
+        sibling_statements: str,
+        *,
+        tactic_hints: str = "",
     ) -> tuple[str | None, TokenUsage]:
         prebuilt = self._match_prebuilt_axiom(node)
         if prebuilt:
@@ -182,6 +244,23 @@ class LemmaLeanifier(BaseAgent):
             )
 
         user_content += self._definitions_context()
+
+        keywords = self._extract_search_keywords(node.statement_nl)
+        search_results = self._search_mathlib(keywords)
+        if search_results:
+            user_content += (
+                "\n\n## Relevant Mathlib Theorems\n"
+                "The following Mathlib theorems may be useful for this formalization:\n"
+                f"{search_results}\n\n"
+                "Use these theorem names and type signatures to guide your Lean 4 code."
+            )
+
+        if tactic_hints:
+            user_content += (
+                "\n\n## Tactic Suggestions\n"
+                f"{tactic_hints}\n\n"
+                "Use these suggested tactics to guide your Lean 4 formalization."
+            )
 
         response = self._llm.complete(
             system=LEMMA_LEANIFY_SYSTEM,

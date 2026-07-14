@@ -38,9 +38,11 @@ WEIGHT_LEMMA_RATIO = 0.4
 WEIGHT_SEMANTIC_ALIGNMENT = 0.2
 WEIGHT_BREVITY = 0.1
 WEIGHT_COMPILATION = 0.3
-QUALITY_THRESHOLD = 0.3
+QUALITY_THRESHOLD = 0.5
+MIN_PROVED_RATIO = 0.5
 
 DEFAULT_K_EXTRA = 2
+DEFAULT_MAX_AUCTION_ROUNDS = 3
 
 
 def _intent_verdict_to_score(verdict_type: IntentVerdictType, confidence: float) -> float:
@@ -94,6 +96,7 @@ class Auctioneer(BaseAgent):
         k: int = 3,
         k_extra: int = DEFAULT_K_EXTRA,
         quality_threshold: float = QUALITY_THRESHOLD,
+        max_auction_rounds: int = DEFAULT_MAX_AUCTION_ROUNDS,
         prover_config: ProverConfig | None = None,
         intent_judge: object | None = None,
         original_idea: str = "",
@@ -105,6 +108,7 @@ class Auctioneer(BaseAgent):
         self._k = k
         self._k_extra = k_extra
         self._quality_threshold = quality_threshold
+        self._max_auction_rounds = max_auction_rounds
         self._prover_config = prover_config
         self._intent_judge = intent_judge
         self._original_idea = original_idea
@@ -150,27 +154,37 @@ class Auctioneer(BaseAgent):
             num_lemmas=len(lemmas),
         )
 
-        candidates = self._run_parallel_formalizers(
+        all_candidates = self._run_parallel_formalizers(
             type_candidate, lemmas, prior_definitions
         )
 
-        auction_result = self._evaluate(type_candidate.name, candidates)
+        auction_result = self._evaluate(type_candidate.name, all_candidates)
 
-        if auction_result.verdict == AuctionVerdict.RETRY and self._k_extra > 0:
+        for _round in range(self._max_auction_rounds - 1):
+            if auction_result.verdict == AuctionVerdict.ACCEPTED:
+                break
+            if self._k_extra <= 0:
+                break
             log.info(
                 "auctioneer_adaptive_spawn",
                 type_name=type_candidate.name,
                 k_extra=self._k_extra,
+                round=_round + 2,
             )
             extra_candidates = self._run_parallel_formalizers(
                 type_candidate,
                 lemmas,
                 prior_definitions,
                 k_override=self._k_extra,
-                id_offset=len(candidates),
+                id_offset=len(all_candidates),
             )
-            all_candidates = candidates + extra_candidates
+            all_candidates = all_candidates + extra_candidates
             auction_result = self._evaluate(type_candidate.name, all_candidates)
+        else:
+            if auction_result.verdict != AuctionVerdict.ACCEPTED:
+                auction_result = self._force_accept_best(
+                    type_candidate.name, all_candidates,
+                )
 
         log.info(
             "auctioneer_done",
@@ -180,7 +194,7 @@ class Auctioneer(BaseAgent):
         )
 
         total_tokens = TokenUsage()
-        for c in candidates:
+        for c in all_candidates:
             total_tokens.input_tokens += sum(
                 lem.lemma.name.__len__() for lem in c.auxiliary_lemmas
             ) * 0  # tokens tracked inside formalizers
@@ -301,6 +315,7 @@ class Auctioneer(BaseAgent):
             lean_repl=self._repl,
             candidate_id=candidate_id,
             prover_config=self._prover_config,
+            intent_judge=self._intent_judge,
         )
 
         ctx = AgentContext(
@@ -322,6 +337,40 @@ class Auctioneer(BaseAgent):
             compiles=False,
         )
 
+    def _force_accept_best(
+        self,
+        type_name: str,
+        candidates: list[TypeFormalizationCandidate],
+    ) -> AuctionResult:
+        """Accept the highest-scoring candidate regardless of threshold."""
+        alignment_scores = {
+            c.candidate_id: self._score_semantic_alignment(c)
+            for c in candidates
+        }
+        scores = [
+            compute_auction_score(c, semantic_alignment=alignment_scores[c.candidate_id])
+            for c in candidates
+        ]
+        scores.sort(key=lambda s: s.total_score, reverse=True)
+        best = scores[0]
+        winner = next(c for c in candidates if c.candidate_id == best.candidate_id)
+        log.warning(
+            "auctioneer_force_accept",
+            type_name=type_name,
+            best_score=best.total_score,
+            threshold=self._quality_threshold,
+        )
+        return AuctionResult(
+            type_name=type_name,
+            verdict=AuctionVerdict.ACCEPTED,
+            winner_id=best.candidate_id,
+            scores=scores,
+            winning_candidate=winner,
+            reason=f"Force-accepted candidate {best.candidate_id} "
+            f"(score {best.total_score:.3f}) after exhausting "
+            f"all auction rounds",
+        )
+
     def _evaluate(
         self,
         type_name: str,
@@ -340,6 +389,24 @@ class Auctioneer(BaseAgent):
         best = scores[0]
         if best.total_score >= self._quality_threshold:
             winner = next(c for c in candidates if c.candidate_id == best.candidate_id)
+            if (
+                winner.total_lemma_count > 0
+                and winner.proved_ratio < MIN_PROVED_RATIO
+            ):
+                log.info(
+                    "auctioneer_min_proved_ratio_reject",
+                    type_name=type_name,
+                    proved_ratio=winner.proved_ratio,
+                    min_required=MIN_PROVED_RATIO,
+                )
+                return AuctionResult(
+                    type_name=type_name,
+                    verdict=AuctionVerdict.RETRY,
+                    scores=scores,
+                    reason=f"Candidate {best.candidate_id} scored "
+                    f"{best.total_score:.3f} but proved_ratio "
+                    f"{winner.proved_ratio:.2f} < {MIN_PROVED_RATIO}",
+                )
             return AuctionResult(
                 type_name=type_name,
                 verdict=AuctionVerdict.ACCEPTED,

@@ -81,6 +81,11 @@ class ProblemResult(BaseModel):
     duration_seconds: float = 0.0
     error_message: str | None = None
     token_usage: int = 0
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 class ConjectureScore(BaseModel):
@@ -118,6 +123,10 @@ class AggregateStats(BaseModel):
     mean_attempts: float = 0.0
     mean_duration_seconds: float = 0.0
     total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    mean_cost_usd: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
 
 
 class ScoreReport(BaseModel):
@@ -139,7 +148,7 @@ class EvalConfig(BaseModel):
     benchmark: BenchmarkSource = BenchmarkSource.MINIF2F
     split: ProblemSplit = ProblemSplit.VALIDATION
     pass_k: int = Field(default=1, ge=1, description="Number of attempts per problem (pass@k)")
-    timeout_seconds: int = Field(default=1800, description="Timeout per problem")
+    timeout_seconds: int = Field(default=600, description="Timeout per problem")
     sample_size: int | None = Field(default=None, description="Subset of problems to evaluate")
     seed: int = Field(default=0, description="Random seed for sampling")
     data_dir: Path = Field(default=Path("data/benchmarks"), description="Where to store benchmark data")

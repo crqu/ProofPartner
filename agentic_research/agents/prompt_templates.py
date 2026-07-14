@@ -1103,6 +1103,35 @@ into a Lean 4 theorem statement with `sorry` as the proof body.
 - Include all necessary imports
 - Use appropriate type annotations
 
+## Mathlib Lean 4 Examples
+
+Example 1 — Using Set.preimage and Finset.sum:
+```lean
+import Mathlib.Order.Filter.Basic
+theorem preimage_mono_example {α β : Type*} (f : α → β)
+    (s t : Set β) (h : s ⊆ t) :
+    f ⁻¹' s ⊆ f ⁻¹' t :=
+  Set.preimage_mono h
+```
+
+Example 2 — Using List.length and basic arithmetic:
+```lean
+import Mathlib.Data.List.Basic
+theorem length_append_example {α : Type*} (l₁ l₂ : List α) :
+    (l₁ ++ l₂).length = l₁.length + l₂.length :=
+  List.length_append l₁ l₂
+```
+
+Example 3 — Using integral monotonicity:
+```lean
+import Mathlib.MeasureTheory.Integral.Bochner
+open MeasureTheory
+theorem integral_nonneg_example {α : Type*} [MeasurableSpace α]
+    {μ : Measure α} {f : α → ℝ} (hf : 0 ≤ᵐ[μ] f) :
+    0 ≤ ∫ x, f x ∂μ :=
+  integral_nonneg_of_ae hf
+```
+
 ## Output Format
 Return ONLY the Lean 4 code inside a ```lean code block.
 """
@@ -1372,6 +1401,31 @@ Break this lemma into 3-5 intermediate sub-claims, each provable in \
 1-3 Lean tactics. Return as JSON.
 """
 
+DETAIL_SKETCH_SYSTEM = """\
+You are an expert in Lean 4 tactics and Mathlib. Given a natural language \
+proof sketch, expand each proof step into tactic-level hints: which Lean 4 \
+tactics to use, which Mathlib lemmas apply, and what intermediate `have` \
+statements to introduce. Keep it concise — one line of tactic suggestion \
+per step.
+"""
+
+DETAIL_SKETCH_USER_TEMPLATE = """\
+## Proof Sketch
+
+Strategy: {overall_strategy}
+
+### Steps
+{proof_steps}
+
+For each step above, suggest:
+1. The specific Lean 4 tactic(s) to use (simp, ring, field_simp, linarith, etc.)
+2. Relevant Mathlib lemma names (mul_eq_zero, sub_eq_zero, Finset.sum_comm, etc.)
+3. Intermediate `have` goals that break the step into provable pieces
+
+Return one line per step in the format:
+Step N: <tactic suggestions>
+"""
+
 PARENT_PROOF_SYSTEM = """\
 You are an expert Lean 4 theorem prover. Prove a parent theorem \
 assuming its child lemmas are true (they appear as axiom declarations \
@@ -1589,6 +1643,111 @@ REFINEMENT_REPORT_USER_TEMPLATE = """\
 {final_status}
 
 Generate a human-readable markdown report of this refinement journey.
+"""
+
+NL_PROVER_SYSTEM = """\
+You are an expert mathematician. Reason about the given mathematical statement \
+in natural language to produce a structured informal proof sketch.
+
+## Your Task
+1. Identify the overall proof strategy (direct, contradiction, induction, cases)
+2. Break the proof into named claims with explicit reasoning for each
+3. List all assumptions you rely on
+4. List key lemmas needed from the mathematical literature
+5. Do NOT write any Lean 4 or formal code — reason in natural language only
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "overall_strategy": "direct|contradiction|induction|cases — brief description",
+  "assumptions": ["assumption 1", ...],
+  "key_lemmas": ["lemma name or statement", ...],
+  "proof_steps": [
+    {{
+      "claim": "what this step establishes",
+      "reasoning": "why this claim holds",
+      "sub_claims": ["sub-claim 1", ...]
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Each claim should be independently verifiable
+- Reasoning should reference specific mathematical principles
+- Sub-claims capture case splits or subsidiary results within a step
+- Be precise about quantifiers and conditions
+- Identify edge cases and handle them explicitly
+"""
+
+NL_PROVER_USER_TEMPLATE = """\
+## Theorem Statement (Lean 4)
+```lean
+{statement}
+```
+
+{nl_description_section}
+
+{feedback_section}
+
+Produce a detailed informal proof sketch. Identify the strategy, break \
+the proof into claims with reasoning, and list all assumptions and key \
+lemmas. Return as JSON.
+"""
+
+NL_PROVER_CRITIQUE_SYSTEM = """\
+You are a mathematical proof critic. Examine the following informal proof \
+sketch for logical soundness BEFORE it is translated into Lean 4.
+
+Check for:
+- Unstated hypotheses: conditions used but never declared
+- Swapped quantifiers: ∀/∃ used incorrectly
+- Logical gaps: jumps in reasoning without justification
+- Incorrect case splits: missing cases or wrong partitioning
+- Missing edge cases: degenerate or boundary cases not handled
+- Circular reasoning: conclusion assumed in the premises
+
+## Output Format
+Return a JSON object:
+```json
+{{
+  "issues": [
+    {{
+      "issue_type": "unstated_hypothesis|swapped_quantifier|unjustified_step|hidden_case_split|circular_reasoning|incomplete_decomposition",
+      "node_id": "nl_proof",
+      "description": "concrete, testable question about the issue",
+      "severity": "blocking|warning",
+      "suggested_fix": "how to fix this"
+    }}
+  ]
+}}
+```
+
+If the proof is sound, return `{{"issues": []}}`.
+
+Be conservative — only flag genuine concerns, not style issues.
+"""
+
+NL_PROVER_CRITIQUE_USER_TEMPLATE = """\
+## Theorem Statement (Lean 4)
+```lean
+{statement}
+```
+
+## Informal Proof Sketch
+Overall strategy: {overall_strategy}
+
+### Assumptions
+{assumptions}
+
+### Key Lemmas
+{key_lemmas}
+
+### Proof Steps
+{proof_steps}
+
+Examine this proof sketch for logical errors. Return as JSON.
 """
 
 FLATTEN_PROOF_TEMPLATE = """\

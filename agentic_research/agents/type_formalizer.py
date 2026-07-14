@@ -62,6 +62,7 @@ class TypeFormalizer(BaseAgent):
         candidate_id: int = 0,
         max_leanify_iterations: int = 5,
         prover_config: ProverConfig | None = None,
+        intent_judge: object | None = None,
     ) -> None:
         super().__init__(name="type_formalizer", max_retries=1)
         self._llm = llm_client
@@ -69,6 +70,7 @@ class TypeFormalizer(BaseAgent):
         self._candidate_id = candidate_id
         self._max_leanify_iterations = max_leanify_iterations
         self._prover_config = prover_config or ProverConfig(max_iterations=3)
+        self._intent_judge = intent_judge
 
     def _execute(self, context: AgentContext) -> AgentResult:
         type_candidate = TypeCandidate.model_validate(
@@ -170,6 +172,33 @@ class TypeFormalizer(BaseAgent):
             compilation = self._repl.execute(full_code)
 
             if compilation.compilation_status == CompilationStatus.OK:
+                if self._intent_judge is not None:
+                    try:
+                        from agentic_research.agents.intent_judge import IntentJudge as IJType
+                        from agentic_research.models.verification import IntentVerdictType
+                        judge: IJType = self._intent_judge  # type: ignore[assignment]
+                        verdict = judge.judge(
+                            lean_code=lean_code,
+                            original_idea=candidate.informal_description,
+                            conjecture=candidate.informal_description,
+                        )
+                        if (
+                            verdict.overall_verdict == IntentVerdictType.INCORRECT
+                            and verdict.overall_confidence >= 0.7
+                        ):
+                            previous_code = lean_code
+                            previous_errors = (
+                                f"Faithfulness check failed: {verdict.all_concerns}"
+                            )
+                            log.info(
+                                "type_leanify_intent_reject",
+                                type_name=candidate.name,
+                                iteration=iteration,
+                                confidence=verdict.overall_confidence,
+                            )
+                            continue
+                    except Exception as exc:
+                        log.warning("type_leanify_intent_judge_error", error=str(exc))
                 log.info("type_leanify_success", type_name=candidate.name, iteration=iteration)
                 return lean_code, total_tokens, True
 

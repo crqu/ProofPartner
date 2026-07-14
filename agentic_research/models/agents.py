@@ -60,10 +60,10 @@ class AgentContext(BaseModel):
 class ProverConfig(BaseModel):
     """Configuration for the iterative prover agent."""
 
-    max_iterations: int = Field(default=5, ge=1, description="Max proof refinement iterations")
+    max_iterations: int = Field(default=2, ge=1, description="Max proof refinement iterations")
     model: str = Field(default="claude-opus-4-6-20250616", description="LLM model ID")
     temperature: float = Field(default=0.0, ge=0.0, le=1.0)
-    max_tokens: int = Field(default=4096, ge=1)
+    max_tokens: int = Field(default=16384, ge=1)
     use_extended_thinking: bool = False
     lean_timeout_seconds: int = Field(default=60, ge=1)
 

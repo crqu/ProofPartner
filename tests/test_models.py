@@ -53,7 +53,7 @@ def test_eval_config_defaults():
     assert config.benchmark == BenchmarkSource.MINIF2F
     assert config.split == ProblemSplit.VALIDATION
     assert config.pass_k == 1
-    assert config.timeout_seconds == 1800
+    assert config.timeout_seconds == 600
     assert config.sample_size is None
 
 

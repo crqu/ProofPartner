@@ -5,7 +5,10 @@ Uses three varied prompting strategies for diversity:
   2. Direct path — directly compare Lean code to idea + conjecture
   3. Adversarial path — devil's advocate seeking semantic mismatches
 
-Adjudication: any VALID concern from any path → overall INCORRECT.
+Adjudication: concerns go through a second-pass LLM review that classifies
+each as false_positive or genuine_error.  Only genuine errors trigger
+INCORRECT.  If the second-pass fails to parse, all concerns are treated
+as genuine (safe fallback).
 
 Feature flag: OPENAI_ENABLED=true adds a 4th GPT verification path.
 """
@@ -24,6 +27,8 @@ from agentic_research.agents.prompt_templates import (
     INTENT_BLIND_USER_TEMPLATE,
     INTENT_DIRECT_SYSTEM_PROMPT,
     INTENT_DIRECT_USER_TEMPLATE,
+    INTENT_FP_REVIEW_SYSTEM,
+    INTENT_FP_REVIEW_USER_TEMPLATE,
 )
 from agentic_research.logging import get_logger
 from agentic_research.models.agents import (
@@ -32,11 +37,13 @@ from agentic_research.models.agents import (
     AgentStatus,
 )
 from agentic_research.models.verification import (
+    ConcernClassification,
     IntentVerdict,
     IntentVerdictType,
     PathVerdict,
     VerificationPath,
 )
+from agentic_research.tools.hint_cleaner import HintCleaner
 
 log = get_logger(__name__)
 
@@ -52,6 +59,7 @@ class IntentJudge(BaseAgent):
         super().__init__(name="intent_judge", max_retries=1)
         self._llm = llm_client
         self._informalizer = informalizer
+        self._hint_cleaner = HintCleaner()
 
     def _execute(self, context: AgentContext) -> AgentResult:
         lean_code = context.task
@@ -79,20 +87,43 @@ class IntentJudge(BaseAgent):
     ) -> IntentVerdict:
         path_verdicts: list[PathVerdict] = []
 
+        cleaned_code = self._hint_cleaner.execute(lean_code).cleaned_code
+
         blind = self._run_blind_path(lean_code, original_idea)
         path_verdicts.append(blind)
 
-        direct = self._run_direct_path(lean_code, original_idea, conjecture)
+        direct = self._run_direct_path(cleaned_code, original_idea, conjecture)
         path_verdicts.append(direct)
 
-        adversarial = self._run_adversarial_path(lean_code, original_idea, conjecture)
+        adversarial = self._run_adversarial_path(cleaned_code, original_idea, conjecture)
         path_verdicts.append(adversarial)
 
         if _openai_enabled():
             openai_verdict = self._run_openai_path(lean_code, original_idea, conjecture)
             path_verdicts.append(openai_verdict)
 
-        return _adjudicate(path_verdicts)
+        return self._adjudicate(
+            path_verdicts,
+            lean_code=lean_code,
+            original_idea=original_idea,
+            conjecture=conjecture,
+        )
+
+    def _adjudicate(
+        self,
+        path_verdicts: list[PathVerdict],
+        *,
+        lean_code: str,
+        original_idea: str,
+        conjecture: str,
+    ) -> IntentVerdict:
+        return _adjudicate(
+            path_verdicts,
+            llm_client=self._llm,
+            lean_code=lean_code,
+            original_idea=original_idea,
+            conjecture=conjecture,
+        )
 
     def _run_blind_path(self, lean_code: str, original_idea: str) -> PathVerdict:
         informal = self._informalizer.informalize(lean_code)
@@ -218,7 +249,14 @@ def _parse_path_verdict(
     )
 
 
-def _adjudicate(path_verdicts: list[PathVerdict]) -> IntentVerdict:
+def _adjudicate(
+    path_verdicts: list[PathVerdict],
+    *,
+    llm_client: LLMClient | None = None,
+    lean_code: str = "",
+    original_idea: str = "",
+    conjecture: str = "",
+) -> IntentVerdict:
     all_concerns: list[str] = []
     notes_parts: list[str] = []
 
@@ -229,7 +267,41 @@ def _adjudicate(path_verdicts: list[PathVerdict]) -> IntentVerdict:
                 f"{pv.path.value} path raised {len(pv.concerns)} concern(s)"
             )
 
-    if all_concerns:
+    dismissed: list[str] = []
+
+    if all_concerns and llm_client is not None:
+        classifications = _run_fp_review(
+            llm_client,
+            lean_code=lean_code,
+            original_idea=original_idea,
+            conjecture=conjecture,
+            concerns=all_concerns,
+        )
+        if classifications is not None:
+            genuine = [
+                c.concern for c in classifications
+                if c.classification == "genuine_error"
+            ]
+            dismissed = [
+                c.concern for c in classifications
+                if c.classification == "false_positive"
+            ]
+            if genuine:
+                overall = IntentVerdictType.INCORRECT
+                notes_parts.append(
+                    f"{len(genuine)} genuine error(s) after FP review"
+                )
+            else:
+                overall = IntentVerdictType.CORRECT
+                notes_parts.append(
+                    f"All {len(dismissed)} concern(s) dismissed as false positives"
+                )
+        else:
+            overall = IntentVerdictType.INCORRECT
+            notes_parts.append(
+                "FP review parse failed; treating all concerns as genuine"
+            )
+    elif all_concerns:
         overall = IntentVerdictType.INCORRECT
         notes_parts.append("Any valid concern requires refinement")
     else:
@@ -252,11 +324,54 @@ def _adjudicate(path_verdicts: list[PathVerdict]) -> IntentVerdict:
         path_verdicts=path_verdicts,
         adjudication_notes="; ".join(notes_parts),
         all_concerns=all_concerns,
+        dismissed_concerns=dismissed,
         type_fidelity=dims["type_fidelity"],
         quantifier_accuracy=dims["quantifier_accuracy"],
         constraint_preservation=dims["constraint_preservation"],
         overall_confidence=dims["overall_confidence"],
     )
+
+
+def _run_fp_review(
+    llm_client: LLMClient,
+    *,
+    lean_code: str,
+    original_idea: str,
+    conjecture: str,
+    concerns: list[str],
+) -> list[ConcernClassification] | None:
+    """Run the second-pass false-positive review. Returns None on parse failure."""
+    concerns_text = "\n".join(f"- {c}" for c in concerns)
+    prompt = INTENT_FP_REVIEW_USER_TEMPLATE.format(
+        lean_code=lean_code,
+        original_idea=original_idea,
+        conjecture=conjecture,
+        concerns=concerns_text,
+    )
+    try:
+        response = llm_client.complete(
+            system=INTENT_FP_REVIEW_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        parsed = llm_client.extract_json(response.content)
+        if not isinstance(parsed, list):
+            log.warning("fp_review_parse_failed", reason="expected JSON array")
+            return None
+
+        return [
+            ConcernClassification(
+                concern=str(item.get("concern", "")),
+                classification=item.get("classification", "genuine_error"),
+                reasoning=str(item.get("reasoning", "")),
+            )
+            for item in parsed
+            if isinstance(item, dict)
+            and item.get("classification") in ("false_positive", "genuine_error")
+        ]
+    except Exception as exc:
+        log.warning("fp_review_failed", error=str(exc))
+        return None
 
 
 def _aggregate_dimensions(

@@ -874,6 +874,70 @@ Try to find semantic mismatches, missing conditions, or unintended \
 interpretations. Return as JSON.
 """
 
+INTENT_FP_REVIEW_SYSTEM = """\
+You are an expert in Lean 4 formalization and mathematical logic. Your job \
+is to review a list of concerns raised about a Lean formalization and \
+classify each as a **false positive** or a **genuine error**.
+
+## False Positives (classify as "false_positive")
+Concerns that do NOT indicate a real semantic mismatch:
+- Equivalent Lean formulations (e.g., `Finset` vs `Set` with `Finite` \
+  instance for finite types — both correctly represent finite sets)
+- Stylistic differences (e.g., using `∀ x : α, P x` vs `∀ x, P x` when \
+  the type can be inferred)
+- Overly strict interpretation of naming or notation
+- Redundant hypotheses that do not change the mathematical meaning
+- Using `ENNReal` vs `ℝ≥0∞` (same type, different notation)
+- Using `iSup` vs `⨆` (same operation, different syntax)
+
+## Genuine Errors (classify as "genuine_error")
+Concerns that indicate a real semantic mismatch:
+- Missing constraints that change the mathematical statement (e.g., \
+  missing `[CompactSpace X]` when compactness is essential)
+- Wrong quantifiers (∀ instead of ∃, or vice versa)
+- Swapped variables or arguments that change meaning
+- Missing hypotheses that trivialize or strengthen the statement
+- Wrong mathematical objects (e.g., using `Nat` when `Int` is needed)
+- Silent weakening or strengthening of the original claim
+
+## Important
+- Default to "genuine_error" when uncertain — it is safer to over-reject \
+  than to accept a wrong formalization.
+- A concern is only a false positive if you can explain WHY the two \
+  formulations are mathematically equivalent.
+
+## Output Format
+Return a JSON array of classification objects:
+```json
+[
+  {{
+    "concern": "the original concern text",
+    "classification": "false_positive" or "genuine_error",
+    "reasoning": "why this is a false positive or genuine error"
+  }}
+]
+```
+"""
+
+INTENT_FP_REVIEW_USER_TEMPLATE = """\
+## Lean 4 Formalization
+```lean
+{lean_code}
+```
+
+## User's Original Idea
+{original_idea}
+
+## Generated Conjecture
+{conjecture}
+
+## Concerns Raised by Verification Paths
+{concerns}
+
+Classify each concern as "false_positive" or "genuine_error". Return as \
+a JSON array.
+"""
+
 INFORMALIZE_PROMPT = """\
 You are an expert in Lean 4 and mathematical communication. Convert the \
 following Lean 4 code into clear, precise natural language. Describe what \

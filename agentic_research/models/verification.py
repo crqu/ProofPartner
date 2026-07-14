@@ -7,6 +7,7 @@ informalization (Lean→NL back-translation), and counterexample search.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,14 @@ class PathVerdict(BaseModel):
     constraint_preservation: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class ConcernClassification(BaseModel):
+    """Classification of a single concern from the false-positive review."""
+
+    concern: str
+    classification: Literal["false_positive", "genuine_error"]
+    reasoning: str = Field(default="")
+
+
 class IntentVerdict(BaseModel):
     """Aggregated verdict from all verification paths."""
 
@@ -43,6 +52,7 @@ class IntentVerdict(BaseModel):
     path_verdicts: list[PathVerdict] = Field(default_factory=list)
     adjudication_notes: str = Field(default="")
     all_concerns: list[str] = Field(default_factory=list)
+    dismissed_concerns: list[str] = Field(default_factory=list)
     type_fidelity: float = Field(default=0.5, ge=0.0, le=1.0)
     quantifier_accuracy: float = Field(default=0.5, ge=0.0, le=1.0)
     constraint_preservation: float = Field(default=0.5, ge=0.0, le=1.0)

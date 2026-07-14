@@ -13,7 +13,7 @@ pip install -e ".[dev,vertex]"
 
 - `ANTHROPIC_API_KEY` — direct Anthropic API access
 - `CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_PROJECT_ID` — Vertex AI backend
-- `AGENTIC_RESEARCH_MODEL` — override default model (default: `claude-opus-4-6-20250616`)
+- `AGENTIC_RESEARCH_MODEL` — override default model (default: `claude-opus-4-6`). Use dateless IDs for Vertex AI
 
 ## Commands
 
@@ -29,7 +29,7 @@ mypy agentic_research/
 
 # CLI (use --model to override LLM model for any command)
 agentic-research --help
-agentic-research --model claude-sonnet-4-20250514 explore 'my idea'
+agentic-research --model claude-sonnet-4-6 explore 'my idea'
 
 # Eval harness
 python -m agentic_research.eval.runner --mode proof_discovery --benchmark miniF2F --split valid --sample-size 30 --seed 42 --extended-thinking
@@ -45,7 +45,7 @@ agentic_research/
 │   ├── nl_prover.py  # Natural language proof stage (generates informal proof sketches)
 │   └── ...           # 20+ specialized agents
 ├── cli/              # Click-based CLI entry point
-├── eval/             # Benchmark evaluation harness (miniF2F, PutnamBench)
+├── eval/             # Benchmark evaluation harness (miniF2F, PutnamBench) + cost tracking
 ├── memory/           # Research session memory (conjectures, directions, preferences)
 ├── models/           # Pydantic data models (agents, formalization, proof, session, etc.)
 ├── orchestrator/     # State machine engine, checkpointing, rollback
@@ -54,7 +54,7 @@ agentic_research/
 │   └── rollback.py   # CheckpointManager for session recovery
 ├── pipelines/        # Multi-agent pipelines (formalization, proof, refinement)
 └── tools/            # Lean 4 integration (REPL, search, lookup)
-tests/                # 18 test files, 812+ tests
+tests/                # 20 test files, 877+ tests
 ```
 
 ## Coding Conventions

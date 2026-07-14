@@ -79,14 +79,15 @@ python -m agentic_research.eval.runner --benchmark PutnamBench --split valid \
 - **miniF2F**: 500 problems (256 valid + 244 test) — AMC/AIME/IMO competition math in Lean 4
 - **PutnamBench**: 672 Putnam competition problems in Lean 4
 
-**Results (miniF2F valid, pass@1, Claude Opus 4.6):**
+**Results (miniF2F valid, pass@1, Claude Opus 4.6, 600s timeout):**
 
-| Sample | Pass Rate | Wilson 95% CI |
-|---|---|---|
-| 5 problems (seed=42) | 5/5 (100%) | [0.57, 1.00] |
-| 30 problems (seed=42) | Pending | — |
+| Sample | Pass Rate | Wilson 95% CI | Cost |
+|---|---|---|---|
+| 5 problems (seed=42) | 5/5 (100%) | [0.57, 1.00] | $0.36 |
+| 10 problems (seed=42) | 7/10 (70%) | [0.40, 0.89] | $1.16 |
+| 30 problems (seed=42) | 18/30 (60%) | [0.42, 0.75] | ~$3.60 |
 
-*Benchmark run in progress — results will be updated when complete.*
+*Pass@1 with single attempt per problem. Cost includes all LLM calls (proof search + NL reasoning + decomposition).*
 
 ## Setup
 
@@ -145,8 +146,7 @@ agentic-research research 'every sufficiently large even number is the sum of tw
 # Show current session state
 agentic-research status
 
-# Prove with ProofCritic + ProofDetailer (recommended for complex theorems)
-agentic-research prove 'your theorem statement' --use-critic --use-detailer --budget 10.00
+# ProofCritic and ProofDetailer are enabled by default for all prove/research commands
 
 # Resume an interrupted research session
 agentic-research resume <session-id>
@@ -211,7 +211,7 @@ For a detailed description of each stage, agent inventory, data flow, and cost c
 
 The proof pipeline follows the architecture from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134):
 
-1. **Automated Tactics** — tries `grind`, `simp_all`, `field_simp; ring`, `field_simp at *; nlinarith` (solves ~40% of AMC-level problems in seconds)
+1. **Automated Tactics** — 2-tier Lean 4 combinator: Tier 1 tries 15 finishing tactics (`omega`, `decide`, `norm_num`, `ring`, `simp_all`, `field_simp`, `positivity`, `tauto`, `grind`, etc.) in a single `first | ...` call; Tier 2 falls back to `aesop` for general proof search
 2. **ProofSearch** — iterative proving with extended thinking (2 strategies × 2 iterations)
 3. **ProofCorrector** — analyzes compilation errors, suggests fixes, retries
 4. **NaturalLanguageProver** — generates structured informal proof sketch before formalization
@@ -219,7 +219,7 @@ The proof pipeline follows the architecture from [Moakhar et al. (2026)](https:/
 6. **ProofDetailer** — expands NL proof into tactic-level steps (runs on ALL nodes)
 7. **LemmaBreakdown** — decomposes into sub-lemmas guided by the validated NL proof + tactic hints
 8. **LemmaLeanifier** — translates sub-lemmas to Lean 4 with Mathlib search context
-9. **RecursiveProver** — parent-before-children proving with extended thinking and compiler error feedback
+9. **RecursiveProver** — parent-before-children proving with extended thinking, compiler error feedback, recursive decomposition of stuck leaves, and dynamic backtracking to earlier pipeline stages
 
 ## Production Hardening
 
@@ -233,6 +233,9 @@ The proof pipeline follows the architecture from [Moakhar et al. (2026)](https:/
 - **Search-augmented leanification** — Mathlib search results injected into formalization prompts for better tactic selection
 - **Progress tracking** — `rich.Progress` shows real-time pipeline stage, elapsed time, and cost
 - **Data package injection** — domain-specific Lean 4 definitions auto-detected and injected for formalization quality
+- **Recursive decomposition** — stuck sub-lemmas decomposed into simpler pieces (depth-capped at 50 nodes)
+- **Dynamic backtracking** — failure classification triggers re-run of type formalization or NL proof stage
+- **Cost tracking** — per-problem token usage and dollar-cost estimation in eval output
 
 ## Package Structure
 
@@ -294,7 +297,7 @@ See also [CITATION.cff](CITATION.cff) for machine-readable citation metadata.
 - **[ReProver](https://arxiv.org/abs/2306.15626)** — retrieval-augmented prover trained on Mathlib
 - **[miniF2F](https://github.com/openai/miniF2F)** — cross-system benchmark for formal olympiad-level mathematics
 - **[Mathlib](https://leanprover-community.github.io/mathlib4_docs/)** — Lean 4's comprehensive mathematics library
-- **[Hilbert](https://arxiv.org/abs/2502.11842)** — 99.2% on miniF2F using whole-proof generation
+- **[Hilbert](https://arxiv.org/abs/2509.22819)** — 99.2% on miniF2F using hierarchical agentic orchestration (Gemini 2.5 Pro + Goedel-Prover-V2-32B)
 - **[Numina-Lean-Agent](https://github.com/project-numina/numina-lean-agent)** — MCP-based agent for Lean 4, 100% on Putnam 2025 (closest Stage 1 competitor)
 - **[Goedel-Prover-V2](https://arxiv.org/abs/2508.03613)** — 90.4% miniF2F with verifier-guided self-correction
 - **[Kimina-Prover-72B](https://huggingface.co/AI-MO/Kimina-Prover-72B)** — RL-trained with structured `have` proofs, 92.2% miniF2F

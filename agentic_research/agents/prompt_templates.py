@@ -874,6 +874,70 @@ Try to find semantic mismatches, missing conditions, or unintended \
 interpretations. Return as JSON.
 """
 
+INTENT_FP_REVIEW_SYSTEM = """\
+You are an expert in Lean 4 formalization and mathematical logic. Your job \
+is to review a list of concerns raised about a Lean formalization and \
+classify each as a **false positive** or a **genuine error**.
+
+## False Positives (classify as "false_positive")
+Concerns that do NOT indicate a real semantic mismatch:
+- Equivalent Lean formulations (e.g., `Finset` vs `Set` with `Finite` \
+  instance for finite types — both correctly represent finite sets)
+- Stylistic differences (e.g., using `∀ x : α, P x` vs `∀ x, P x` when \
+  the type can be inferred)
+- Overly strict interpretation of naming or notation
+- Redundant hypotheses that do not change the mathematical meaning
+- Using `ENNReal` vs `ℝ≥0∞` (same type, different notation)
+- Using `iSup` vs `⨆` (same operation, different syntax)
+
+## Genuine Errors (classify as "genuine_error")
+Concerns that indicate a real semantic mismatch:
+- Missing constraints that change the mathematical statement (e.g., \
+  missing `[CompactSpace X]` when compactness is essential)
+- Wrong quantifiers (∀ instead of ∃, or vice versa)
+- Swapped variables or arguments that change meaning
+- Missing hypotheses that trivialize or strengthen the statement
+- Wrong mathematical objects (e.g., using `Nat` when `Int` is needed)
+- Silent weakening or strengthening of the original claim
+
+## Important
+- Default to "genuine_error" when uncertain — it is safer to over-reject \
+  than to accept a wrong formalization.
+- A concern is only a false positive if you can explain WHY the two \
+  formulations are mathematically equivalent.
+
+## Output Format
+Return a JSON array of classification objects:
+```json
+[
+  {{
+    "concern": "the original concern text",
+    "classification": "false_positive" or "genuine_error",
+    "reasoning": "why this is a false positive or genuine error"
+  }}
+]
+```
+"""
+
+INTENT_FP_REVIEW_USER_TEMPLATE = """\
+## Lean 4 Formalization
+```lean
+{lean_code}
+```
+
+## User's Original Idea
+{original_idea}
+
+## Generated Conjecture
+{conjecture}
+
+## Concerns Raised by Verification Paths
+{concerns}
+
+Classify each concern as "false_positive" or "genuine_error". Return as \
+a JSON array.
+"""
+
 INFORMALIZE_PROMPT = """\
 You are an expert in Lean 4 and mathematical communication. Convert the \
 following Lean 4 code into clear, precise natural language. Describe what \
@@ -1748,6 +1812,87 @@ Overall strategy: {overall_strategy}
 {proof_steps}
 
 Examine this proof sketch for logical errors. Return as JSON.
+"""
+
+# ---------------------------------------------------------------------------
+# Paper-level extraction (Extractor agent)
+# ---------------------------------------------------------------------------
+
+EXTRACTOR_SYSTEM = """\
+You are an expert mathematical paper analyst. Your task is to read a \
+mathematical research paper and extract its key formalization targets \
+into structured JSON.
+
+## What to Extract
+
+1. **Theorems** — the paper's headline result(s) and secondary theorems.
+   Mark the main result(s) with `is_main: true`.
+2. **Definitions** — domain-specific concepts the theorems depend on, \
+   especially those absent from Mathlib. Note dependencies between definitions.
+3. **Lemmas** — supporting results used in proofs. Note which theorem each \
+   lemma supports.
+4. **Prior work** — external results cited from other papers. These are \
+   candidates for axiom treatment (assumed without proof).
+
+## Output Format
+Return a JSON object with this exact structure:
+```json
+{{
+  "paper_title": "title of the paper",
+  "paper_domain": "primary mathematical domain",
+  "theorems": [
+    {{
+      "statement": "natural language statement of the theorem",
+      "statement_latex": "LaTeX statement if available",
+      "is_main": true,
+      "section_ref": "section/theorem number reference"
+    }}
+  ],
+  "definitions": [
+    {{
+      "name": "concept name",
+      "informal_statement": "what this concept means",
+      "depends_on": ["other concept names"],
+      "in_mathlib": false
+    }}
+  ],
+  "lemmas": [
+    {{
+      "name": "lemma name or number",
+      "informal_statement": "what this lemma states",
+      "used_in_proof_of": "which theorem this supports"
+    }}
+  ],
+  "prior_work": [
+    {{
+      "citation": "author(s), year, paper title",
+      "result_statement": "what the cited result states",
+      "axiom_candidate": true
+    }}
+  ]
+}}
+```
+
+## Guidelines
+- Focus on mathematical content, not formatting or metadata
+- Be precise about mathematical statements — preserve quantifiers and conditions
+- Mark `in_mathlib: true` only for concepts you are confident exist in Mathlib
+- Mark `axiom_candidate: true` for prior results that would need to be assumed \
+  (axiomatized) rather than re-proved during formalization
+- Mark `axiom_candidate: false` for standard results that are likely provable \
+  from Mathlib (e.g., basic algebra, simple inequalities)
+- If the paper is degraded (PDF extraction artifacts), extract what you can \
+  and skip malformed sections
+- Return valid JSON only — no explanatory text outside the JSON block
+"""
+
+EXTRACTOR_USER_TEMPLATE = """\
+## Paper Text
+
+{paper_text}
+
+Extract the theorems, definitions, lemmas, and prior work from this paper. \
+Return as JSON.
 """
 
 FLATTEN_PROOF_TEMPLATE = """\

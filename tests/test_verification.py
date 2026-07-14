@@ -6,11 +6,13 @@ Lean REPL uses mock backend for deterministic testing.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 
 from agentic_research.models.agents import LLMResponse, TokenUsage
 from agentic_research.models.verification import (
+    ConcernClassification,
     CounterexampleCandidate,
     CounterexampleResult,
     CounterexampleStatus,
@@ -94,6 +96,7 @@ class TestVerificationModels:
         assert VerificationPath.DIRECT.value == "direct"
         assert VerificationPath.ADVERSARIAL.value == "adversarial"
         assert VerificationPath.OPENAI.value == "openai"
+        assert VerificationPath.GOOGLE.value == "google"
 
     def test_serialization_roundtrip(self):
         verdict = IntentVerdict(
@@ -541,34 +544,40 @@ class TestPassesThreshold:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenAIFeatureFlag:
-    def test_openai_disabled_by_default(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
+class TestAutoDetectSecondaryModel:
+    def test_returns_openai_when_openai_key_set(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            result = _detect_secondary_model()
+        assert result == ("openai", "gpt-4o")
+
+    def test_returns_google_when_only_google_key_set(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
+
+        with patch.dict("os.environ", {"GOOGLE_API_KEY": "goog-test"}, clear=True):
+            result = _detect_secondary_model()
+        assert result == ("google", "gemini-2.5-flash")
+
+    def test_returns_none_when_no_keys(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
 
         with patch.dict("os.environ", {}, clear=True):
-            assert not _openai_enabled()
+            result = _detect_secondary_model()
+        assert result is None
 
-    def test_openai_enabled(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
+    def test_openai_wins_when_both_keys_set(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
 
-        with patch.dict("os.environ", {"OPENAI_ENABLED": "true"}):
-            assert _openai_enabled()
+        with patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "sk-test", "GOOGLE_API_KEY": "goog-test"},
+            clear=True,
+        ):
+            result = _detect_secondary_model()
+        assert result == ("openai", "gpt-4o")
 
-    def test_openai_enabled_values(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
-
-        for val in ("true", "True", "TRUE", "1", "yes"):
-            with patch.dict("os.environ", {"OPENAI_ENABLED": val}):
-                assert _openai_enabled()
-
-    def test_openai_disabled_values(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
-
-        for val in ("false", "0", "no", ""):
-            with patch.dict("os.environ", {"OPENAI_ENABLED": val}):
-                assert not _openai_enabled()
-
-    def test_openai_path_added_when_enabled(self):
+    def test_judge_produces_4_verdicts_when_secondary_available(self):
         from agentic_research.agents.informalizer import Informalizer
         from agentic_research.agents.intent_judge import IntentJudge
 
@@ -581,13 +590,15 @@ class TestOpenAIFeatureFlag:
         informalizer = Informalizer(llm_client=llm)
         judge = IntentJudge(llm_client=llm, informalizer=informalizer)
 
-        mock_openai_verdict = PathVerdict(
+        mock_secondary_verdict = PathVerdict(
             path=VerificationPath.OPENAI,
             verdict=IntentVerdictType.CORRECT,
             confidence=0.9,
         )
-        with patch.dict("os.environ", {"OPENAI_ENABLED": "true"}):
-            with patch.object(judge, "_run_openai_path", return_value=mock_openai_verdict):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            with patch.object(
+                judge, "_run_secondary_path", return_value=mock_secondary_verdict
+            ):
                 verdict = judge.judge(
                     lean_code="theorem t : True := trivial",
                     original_idea="idea",
@@ -595,8 +606,62 @@ class TestOpenAIFeatureFlag:
                 )
 
         assert len(verdict.path_verdicts) == 4
-        paths = {pv.path for pv in verdict.path_verdicts}
-        assert VerificationPath.OPENAI in paths
+
+    def test_judge_produces_3_verdicts_when_no_secondary(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([
+            "Back translation.",
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+        ])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        with patch.dict("os.environ", {}, clear=True):
+            verdict = judge.judge(
+                lean_code="theorem t : True := trivial",
+                original_idea="idea",
+                conjecture="conjecture",
+            )
+
+        assert len(verdict.path_verdicts) == 3
+
+    def test_google_path_graceful_failure_import_error(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        with patch.dict("sys.modules", {"google": None, "google.genai": None}):
+            verdict = judge._run_google_path(
+                "theorem t : True := trivial", "idea", "conjecture"
+            )
+
+        assert verdict.path == VerificationPath.GOOGLE
+        assert verdict.confidence == 0.0
+        assert "failed" in verdict.reasoning.lower()
+
+    def test_openai_path_graceful_failure_api_error(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        with patch.dict("sys.modules", {"openai": MagicMock(side_effect=Exception("API error"))}):
+            verdict = judge._run_openai_path(
+                "theorem t : True := trivial", "idea", "conjecture"
+            )
+
+        assert verdict.path == VerificationPath.OPENAI
+        assert verdict.confidence == 0.0
+        assert "failed" in verdict.reasoning.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +733,317 @@ class TestAdjudication:
         result = _adjudicate(verdicts)
         assert "blind" in result.adjudication_notes
         assert "refinement" in result.adjudication_notes
+
+
+# ---------------------------------------------------------------------------
+# ConcernClassification model
+# ---------------------------------------------------------------------------
+
+
+class TestConcernClassification:
+    def test_false_positive(self):
+        c = ConcernClassification(
+            concern="uses Finset instead of Set",
+            classification="false_positive",
+            reasoning="equivalent formulations",
+        )
+        assert c.classification == "false_positive"
+
+    def test_genuine_error(self):
+        c = ConcernClassification(
+            concern="missing compactness hypothesis",
+            classification="genuine_error",
+            reasoning="required for theorem to hold",
+        )
+        assert c.classification == "genuine_error"
+
+    def test_dismissed_concerns_on_verdict(self):
+        v = IntentVerdict(
+            overall_verdict=IntentVerdictType.CORRECT,
+            all_concerns=["stylistic concern"],
+            dismissed_concerns=["stylistic concern"],
+        )
+        assert v.dismissed_concerns == ["stylistic concern"]
+
+    def test_dismissed_concerns_default_empty(self):
+        v = IntentVerdict(overall_verdict=IntentVerdictType.CORRECT)
+        assert v.dismissed_concerns == []
+
+
+# ---------------------------------------------------------------------------
+# False-positive review in _adjudicate
+# ---------------------------------------------------------------------------
+
+
+def _fp_review_json(classifications: list[dict]) -> str:
+    return f"```json\n{json.dumps(classifications)}\n```"
+
+
+class TestFalsePositiveReview:
+    def _make_judge_with_fp_review(self, path_responses: list[str], fp_response: str):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        all_responses = path_responses + [fp_response]
+        llm = _make_mock_llm_with_json(all_responses)
+        informalizer = Informalizer(llm_client=llm)
+        return IntentJudge(llm_client=llm, informalizer=informalizer)
+
+    def test_false_positive_dismissed_correct_verdict(self):
+        """All concerns dismissed as false positives -> CORRECT verdict."""
+        fp_response = _fp_review_json([
+            {"concern": "uses Finset instead of Set",
+             "classification": "false_positive",
+             "reasoning": "equivalent for finite types"},
+        ])
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            _CORRECT_JSON,
+            _INCORRECT_JSON,
+            _CORRECT_JSON,
+        ], fp_response)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.CORRECT
+        assert len(verdict.dismissed_concerns) == 1
+        assert "uses Finset instead of Set" in verdict.dismissed_concerns[0]
+
+    def test_genuine_error_triggers_incorrect(self):
+        """Genuine errors still trigger INCORRECT verdict."""
+        fp_response = _fp_review_json([
+            {"concern": "missing hypothesis",
+             "classification": "genuine_error",
+             "reasoning": "compactness is required"},
+        ])
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            _CORRECT_JSON,
+            _INCORRECT_JSON,
+            _CORRECT_JSON,
+        ], fp_response)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.INCORRECT
+        assert verdict.dismissed_concerns == []
+
+    def test_zero_concerns_short_circuits(self):
+        """Zero concerns → no second-pass LLM call."""
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([
+            "Back translation.",
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+        ])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.CORRECT
+        assert llm.complete.call_count == 4
+
+    def test_mixed_results_incorrect(self):
+        """Some false_positive + some genuine_error → INCORRECT."""
+        fp_response = _fp_review_json([
+            {"concern": "stylistic difference",
+             "classification": "false_positive",
+             "reasoning": "equivalent notation"},
+            {"concern": "wrong quantifier",
+             "classification": "genuine_error",
+             "reasoning": "∀ should be ∃"},
+        ])
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            _INCORRECT_JSON,
+            '{"verdict": "incorrect", "concerns": ["stylistic difference"], "confidence": 0.7, "reasoning": "style"}',
+            _CORRECT_JSON,
+        ], fp_response)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.INCORRECT
+        assert len(verdict.dismissed_concerns) == 1
+        assert len(verdict.all_concerns) == 2
+
+    def test_all_false_positive_correct(self):
+        """Every concern dismissed → CORRECT verdict."""
+        fp_response = _fp_review_json([
+            {"concern": "concern A",
+             "classification": "false_positive",
+             "reasoning": "equivalent"},
+            {"concern": "concern B",
+             "classification": "false_positive",
+             "reasoning": "stylistic"},
+        ])
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            '{"verdict": "incorrect", "concerns": ["concern A"], "confidence": 0.7, "reasoning": "a"}',
+            '{"verdict": "incorrect", "concerns": ["concern B"], "confidence": 0.7, "reasoning": "b"}',
+            _CORRECT_JSON,
+        ], fp_response)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.CORRECT
+        assert len(verdict.dismissed_concerns) == 2
+
+    def test_fp_review_parse_failure_treats_as_genuine(self):
+        """Parse failure in second pass → all concerns treated as genuine."""
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            _CORRECT_JSON,
+            _INCORRECT_JSON,
+            _CORRECT_JSON,
+        ], "not valid json at all")
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.INCORRECT
+        assert verdict.dismissed_concerns == []
+
+    def test_unexpected_classifications_treated_as_genuine(self):
+        """LLM returns unexpected classification values → empty after filter → INCORRECT."""
+        fp_response = _fp_review_json([
+            {"concern": "missing hypothesis",
+             "classification": "maybe_error",
+             "reasoning": "not sure"},
+        ])
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            _CORRECT_JSON,
+            _INCORRECT_JSON,
+            _CORRECT_JSON,
+        ], fp_response)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.INCORRECT
+        assert verdict.dismissed_concerns == []
+
+    def test_run_fp_review_returns_none_on_empty_classifications(self):
+        """_run_fp_review returns None when all classifications are unexpected."""
+        from agentic_research.agents.intent_judge import _run_fp_review
+
+        fp_response = _fp_review_json([
+            {"concern": "c1", "classification": "uncertain", "reasoning": "dunno"},
+            {"concern": "c2", "classification": "maybe", "reasoning": "idk"},
+        ])
+        llm = _make_mock_llm_with_json([fp_response])
+        result = _run_fp_review(
+            llm,
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+            concerns=["c1", "c2"],
+        )
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# HintCleaner wiring in IntentJudge
+# ---------------------------------------------------------------------------
+
+
+class TestHintCleanerWiring:
+    def test_direct_path_receives_cleaned_code(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([
+            "Back translation.",
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+        ])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        code_with_comments = "-- AI hint\ntheorem t : True := trivial"
+        judge.judge(
+            lean_code=code_with_comments,
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+
+        direct_call = llm.complete.call_args_list[2]
+        direct_prompt = direct_call[1].get("messages", direct_call[0][0] if direct_call[0] else [])[0]["content"]
+        assert "-- AI hint" not in direct_prompt
+
+    def test_adversarial_path_receives_cleaned_code(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([
+            "Back translation.",
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+        ])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        code_with_comments = "-- AI hint\ntheorem t : True := trivial"
+        judge.judge(
+            lean_code=code_with_comments,
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+
+        adversarial_call = llm.complete.call_args_list[3]
+        adv_prompt = adversarial_call[1].get("messages", adversarial_call[0][0] if adversarial_call[0] else [])[0]["content"]
+        assert "-- AI hint" not in adv_prompt
+
+    def test_judge_has_hint_cleaner(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+        from agentic_research.tools.hint_cleaner import HintCleaner
+
+        llm = _make_mock_llm_with_json([])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+        assert isinstance(judge._hint_cleaner, HintCleaner)
+
+
+# ---------------------------------------------------------------------------
+# _adjudicate module function backward compat (no llm_client)
+# ---------------------------------------------------------------------------
+
+
+class TestAdjudicateBackwardCompat:
+    def test_no_llm_client_concerns_trigger_incorrect(self):
+        """Without llm_client, concerns still trigger INCORRECT (old behavior)."""
+        from agentic_research.agents.intent_judge import _adjudicate
+
+        verdicts = [
+            PathVerdict(
+                path=VerificationPath.BLIND,
+                verdict=IntentVerdictType.INCORRECT,
+                concerns=["issue"],
+            ),
+            PathVerdict(path=VerificationPath.DIRECT, verdict=IntentVerdictType.CORRECT),
+        ]
+        result = _adjudicate(verdicts)
+        assert result.overall_verdict == IntentVerdictType.INCORRECT
+        assert result.dismissed_concerns == []
 
 
 # ---------------------------------------------------------------------------

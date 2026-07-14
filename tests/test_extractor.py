@@ -137,7 +137,7 @@ class TestExtractor:
         mock_llm.extract_json.return_value = json.loads(SAMPLE_EXTRACTION_JSON)
 
         extractor = Extractor(llm_client=mock_llm)
-        result = extractor.extract("\\begin{document}...\\end{document}")
+        result, token_usage = extractor.extract("\\begin{document}...\\end{document}")
 
         assert result.paper_title == "Distributionally Robust Optimization"
         assert result.paper_domain == "optimization"
@@ -147,6 +147,8 @@ class TestExtractor:
         assert len(result.definitions) == 2
         assert len(result.lemmas) == 1
         assert len(result.prior_work) == 2
+        assert token_usage.input_tokens == 500
+        assert token_usage.output_tokens == 200
 
     def test_empty_paper(self) -> None:
         mock_llm = MagicMock()
@@ -162,7 +164,7 @@ class TestExtractor:
         mock_llm.extract_json.return_value = json.loads(empty_json)
 
         extractor = Extractor(llm_client=mock_llm)
-        result = extractor.extract("no math here")
+        result, _ = extractor.extract("no math here")
 
         assert result.theorems == []
         assert result.definitions == []
@@ -175,7 +177,7 @@ class TestExtractor:
         mock_llm.extract_json.return_value = None
 
         extractor = Extractor(llm_client=mock_llm)
-        result = extractor.extract("some paper text")
+        result, _ = extractor.extract("some paper text")
 
         assert isinstance(result, ExtractionResult)
         assert result.theorems == []
@@ -187,7 +189,7 @@ class TestExtractor:
 
         extractor = Extractor(llm_client=mock_llm)
         long_text = "x" * 200_000
-        extractor.extract(long_text)
+        _, _ = extractor.extract(long_text)
 
         call_args = mock_llm.complete.call_args
         messages = call_args.kwargs["messages"]
@@ -200,7 +202,7 @@ class TestExtractor:
         mock_llm.extract_json.return_value = json.loads(SAMPLE_EXTRACTION_JSON)
 
         extractor = Extractor(llm_client=mock_llm)
-        result = extractor.extract("paper text")
+        result, _ = extractor.extract("paper text")
 
         main_theorems = [t for t in result.theorems if t.is_main]
         assert len(main_theorems) == 1
@@ -212,7 +214,7 @@ class TestExtractor:
         mock_llm.extract_json.return_value = json.loads(SAMPLE_EXTRACTION_JSON)
 
         extractor = Extractor(llm_client=mock_llm)
-        result = extractor.extract("paper text")
+        result, _ = extractor.extract("paper text")
 
         axiom_candidates = [p for p in result.prior_work if p.axiom_candidate]
         non_axiom = [p for p in result.prior_work if not p.axiom_candidate]
@@ -227,7 +229,7 @@ class TestExtractor:
         mock_llm.extract_json.return_value = {}
 
         extractor = Extractor(llm_client=mock_llm)
-        extractor.extract("text")
+        _, _ = extractor.extract("text")
 
         call_args = mock_llm.complete.call_args
         assert call_args.kwargs["temperature"] == 0.0
@@ -270,16 +272,11 @@ class TestFormalizePaperCLI:
             theorems=[ExtractedTheorem(statement="Main result", is_main=True)],
             definitions=[ExtractedDefinition(name="D1", informal_statement="def")],
         )
+        mock_tokens = TokenUsage(input_tokens=100, output_tokens=50)
 
         with (
             patch("agentic_research.cli.main._create_llm_client") as mock_llm,
-            patch("agentic_research.agents.extractor.Extractor.extract", return_value=mock_result),
-            patch(
-                "agentic_research.agents.extractor.Extractor.cumulative_tokens",
-                new_callable=lambda: property(
-                    lambda self: TokenUsage(input_tokens=100, output_tokens=50)
-                ),
-            ),
+            patch("agentic_research.agents.extractor.Extractor.extract", return_value=(mock_result, mock_tokens)),
         ):
             mock_llm.return_value = MagicMock()
             result = runner.invoke(
@@ -318,16 +315,11 @@ class TestFormalizePaperCLI:
         mock_result = ExtractionResult(
             theorems=[ExtractedTheorem(statement="Result", is_main=True)],
         )
+        mock_tokens = TokenUsage(input_tokens=100, output_tokens=50)
 
         with (
             patch("agentic_research.cli.main._create_llm_client") as mock_llm,
-            patch("agentic_research.agents.extractor.Extractor.extract", return_value=mock_result),
-            patch(
-                "agentic_research.agents.extractor.Extractor.cumulative_tokens",
-                new_callable=lambda: property(
-                    lambda self: TokenUsage(input_tokens=100, output_tokens=50)
-                ),
-            ),
+            patch("agentic_research.agents.extractor.Extractor.extract", return_value=(mock_result, mock_tokens)),
         ):
             mock_llm.return_value = MagicMock()
             result = runner.invoke(cli, ["formalize-paper", str(tex_file)])
@@ -346,16 +338,11 @@ class TestFormalizePaperCLI:
         mock_result = ExtractionResult(
             theorems=[ExtractedTheorem(statement="Only theorem", is_main=True)],
         )
+        mock_tokens = TokenUsage(input_tokens=100, output_tokens=50)
 
         with (
             patch("agentic_research.cli.main._create_llm_client") as mock_llm,
-            patch("agentic_research.agents.extractor.Extractor.extract", return_value=mock_result),
-            patch(
-                "agentic_research.agents.extractor.Extractor.cumulative_tokens",
-                new_callable=lambda: property(
-                    lambda self: TokenUsage(input_tokens=100, output_tokens=50)
-                ),
-            ),
+            patch("agentic_research.agents.extractor.Extractor.extract", return_value=(mock_result, mock_tokens)),
         ):
             mock_llm.return_value = MagicMock()
             result = runner.invoke(

@@ -790,9 +790,8 @@ def formalize_paper_cmd(
         try:
             import pymupdf  # noqa: F811
 
-            doc = pymupdf.open(str(file_path))
-            paper_text = "\n".join(page.get_text() for page in doc)
-            doc.close()
+            with pymupdf.open(str(file_path)) as doc:
+                paper_text = "\n".join(page.get_text() for page in doc)
         except ImportError:
             console.print(
                 "[red]Error:[/red] PDF support requires pymupdf. "
@@ -819,8 +818,13 @@ def formalize_paper_cmd(
     extractor = Extractor(llm_client=llm)
 
     with console.status(f"{_cost_display(cost_tracker, budget)} Extracting from {file_path.name}..."):
-        result = extractor.extract(paper_text)
-        _record_agent_tokens(cost_tracker, extractor)
+        result, token_usage = extractor.extract(paper_text)
+        cost_tracker.record_usage(
+            input_tokens=token_usage.input_tokens,
+            output_tokens=token_usage.output_tokens,
+            cache_read_tokens=token_usage.cache_read_input_tokens,
+            cache_write_tokens=token_usage.cache_creation_input_tokens,
+        )
 
     if result.paper_title:
         console.print(f"\n[bold]Paper:[/bold] {result.paper_title}")

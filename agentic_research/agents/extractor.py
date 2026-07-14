@@ -18,6 +18,7 @@ from agentic_research.models.agents import (
     AgentContext,
     AgentResult,
     AgentStatus,
+    TokenUsage,
 )
 from agentic_research.models.extraction import (
     ExtractionResult,
@@ -44,7 +45,7 @@ class Extractor(BaseAgent):
         self._llm = llm_client
         self._use_extended_thinking = use_extended_thinking
 
-    def extract(self, paper_text: str) -> ExtractionResult:
+    def extract(self, paper_text: str) -> tuple[ExtractionResult, TokenUsage]:
         """Extract theorems, definitions, lemmas, and prior work from paper text."""
         truncated = paper_text[:MAX_INPUT_CHARS]
 
@@ -58,19 +59,17 @@ class Extractor(BaseAgent):
             use_cache=True,
         )
 
-        self._accumulate_tokens(response.token_usage)
-
-        return self._parse_result(response.content)
+        return self._parse_result(response.content), response.token_usage
 
     def _execute(self, context: AgentContext) -> AgentResult:
         paper_text = context.task
-        result = self.extract(paper_text)
+        result, token_usage = self.extract(paper_text)
 
         return AgentResult(
             agent_name=self.name,
             status=AgentStatus.SUCCESS,
             result=result.model_dump(),
-            token_usage=self.cumulative_tokens,
+            token_usage=token_usage,
         )
 
     def _parse_result(self, response_text: str) -> ExtractionResult:

@@ -30,6 +30,9 @@ vertex = [
 lean = [
     "lean-dojo>=2.1.0",
 ]
+google = [
+    "google-genai>=1.0",
+]
 
 [project.scripts]
 agentic-research = "agentic_research.cli.main:cli"
@@ -41,7 +44,7 @@ warn_unused_configs = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["lean_dojo.*", "openai.*", "anthropic.*", "rich.*"]
+module = ["lean_dojo.*", "openai.*", "anthropic.*", "rich.*", "google.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

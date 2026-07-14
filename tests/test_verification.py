@@ -96,6 +96,7 @@ class TestVerificationModels:
         assert VerificationPath.DIRECT.value == "direct"
         assert VerificationPath.ADVERSARIAL.value == "adversarial"
         assert VerificationPath.OPENAI.value == "openai"
+        assert VerificationPath.GOOGLE.value == "google"
 
     def test_serialization_roundtrip(self):
         verdict = IntentVerdict(
@@ -543,34 +544,40 @@ class TestPassesThreshold:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenAIFeatureFlag:
-    def test_openai_disabled_by_default(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
+class TestAutoDetectSecondaryModel:
+    def test_returns_openai_when_openai_key_set(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            result = _detect_secondary_model()
+        assert result == ("openai", "gpt-4o")
+
+    def test_returns_google_when_only_google_key_set(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
+
+        with patch.dict("os.environ", {"GOOGLE_API_KEY": "goog-test"}, clear=True):
+            result = _detect_secondary_model()
+        assert result == ("google", "gemini-2.5-flash")
+
+    def test_returns_none_when_no_keys(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
 
         with patch.dict("os.environ", {}, clear=True):
-            assert not _openai_enabled()
+            result = _detect_secondary_model()
+        assert result is None
 
-    def test_openai_enabled(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
+    def test_openai_wins_when_both_keys_set(self):
+        from agentic_research.agents.intent_judge import _detect_secondary_model
 
-        with patch.dict("os.environ", {"OPENAI_ENABLED": "true"}):
-            assert _openai_enabled()
+        with patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "sk-test", "GOOGLE_API_KEY": "goog-test"},
+            clear=True,
+        ):
+            result = _detect_secondary_model()
+        assert result == ("openai", "gpt-4o")
 
-    def test_openai_enabled_values(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
-
-        for val in ("true", "True", "TRUE", "1", "yes"):
-            with patch.dict("os.environ", {"OPENAI_ENABLED": val}):
-                assert _openai_enabled()
-
-    def test_openai_disabled_values(self):
-        from agentic_research.agents.intent_judge import _openai_enabled
-
-        for val in ("false", "0", "no", ""):
-            with patch.dict("os.environ", {"OPENAI_ENABLED": val}):
-                assert not _openai_enabled()
-
-    def test_openai_path_added_when_enabled(self):
+    def test_judge_produces_4_verdicts_when_secondary_available(self):
         from agentic_research.agents.informalizer import Informalizer
         from agentic_research.agents.intent_judge import IntentJudge
 
@@ -583,13 +590,15 @@ class TestOpenAIFeatureFlag:
         informalizer = Informalizer(llm_client=llm)
         judge = IntentJudge(llm_client=llm, informalizer=informalizer)
 
-        mock_openai_verdict = PathVerdict(
+        mock_secondary_verdict = PathVerdict(
             path=VerificationPath.OPENAI,
             verdict=IntentVerdictType.CORRECT,
             confidence=0.9,
         )
-        with patch.dict("os.environ", {"OPENAI_ENABLED": "true"}):
-            with patch.object(judge, "_run_openai_path", return_value=mock_openai_verdict):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            with patch.object(
+                judge, "_run_secondary_path", return_value=mock_secondary_verdict
+            ):
                 verdict = judge.judge(
                     lean_code="theorem t : True := trivial",
                     original_idea="idea",
@@ -597,8 +606,62 @@ class TestOpenAIFeatureFlag:
                 )
 
         assert len(verdict.path_verdicts) == 4
-        paths = {pv.path for pv in verdict.path_verdicts}
-        assert VerificationPath.OPENAI in paths
+
+    def test_judge_produces_3_verdicts_when_no_secondary(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([
+            "Back translation.",
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+            _CORRECT_JSON,
+        ])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        with patch.dict("os.environ", {}, clear=True):
+            verdict = judge.judge(
+                lean_code="theorem t : True := trivial",
+                original_idea="idea",
+                conjecture="conjecture",
+            )
+
+        assert len(verdict.path_verdicts) == 3
+
+    def test_google_path_graceful_failure_import_error(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        with patch.dict("sys.modules", {"google": None, "google.genai": None}):
+            verdict = judge._run_google_path(
+                "theorem t : True := trivial", "idea", "conjecture"
+            )
+
+        assert verdict.path == VerificationPath.GOOGLE
+        assert verdict.confidence == 0.0
+        assert "failed" in verdict.reasoning.lower()
+
+    def test_openai_path_graceful_failure_api_error(self):
+        from agentic_research.agents.informalizer import Informalizer
+        from agentic_research.agents.intent_judge import IntentJudge
+
+        llm = _make_mock_llm_with_json([])
+        informalizer = Informalizer(llm_client=llm)
+        judge = IntentJudge(llm_client=llm, informalizer=informalizer)
+
+        with patch.dict("sys.modules", {"openai": MagicMock(side_effect=Exception("API error"))}):
+            verdict = judge._run_openai_path(
+                "theorem t : True := trivial", "idea", "conjecture"
+            )
+
+        assert verdict.path == VerificationPath.OPENAI
+        assert verdict.confidence == 0.0
+        assert "failed" in verdict.reasoning.lower()
 
 
 # ---------------------------------------------------------------------------

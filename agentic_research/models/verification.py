@@ -17,6 +17,7 @@ class VerificationPath(str, Enum):
     DIRECT = "direct"
     ADVERSARIAL = "adversarial"
     OPENAI = "openai"
+    GOOGLE = "google"
 
 
 class IntentVerdictType(str, Enum):

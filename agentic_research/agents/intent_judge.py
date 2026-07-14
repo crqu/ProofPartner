@@ -10,7 +10,8 @@ each as false_positive or genuine_error.  Only genuine errors trigger
 INCORRECT.  If the second-pass fails to parse, all concerns are treated
 as genuine (safe fallback).
 
-Feature flag: OPENAI_ENABLED=true adds a 4th GPT verification path.
+Auto-detects secondary model (OpenAI/Google) from environment for a 4th
+verification path.  Gracefully degrades to 3 paths when unavailable.
 """
 
 from __future__ import annotations
@@ -98,9 +99,13 @@ class IntentJudge(BaseAgent):
         adversarial = self._run_adversarial_path(cleaned_code, original_idea, conjecture)
         path_verdicts.append(adversarial)
 
-        if _openai_enabled():
-            openai_verdict = self._run_openai_path(cleaned_code, original_idea, conjecture)
-            path_verdicts.append(openai_verdict)
+        secondary = _detect_secondary_model()
+        if secondary:
+            provider, model = secondary
+            secondary_verdict = self._run_secondary_path(
+                provider, model, cleaned_code, original_idea, conjecture
+            )
+            path_verdicts.append(secondary_verdict)
 
         return self._adjudicate(
             path_verdicts,
@@ -209,9 +214,63 @@ class IntentJudge(BaseAgent):
                 reasoning=f"OpenAI path failed: {exc}",
             )
 
+    def _run_google_path(
+        self, lean_code: str, original_idea: str, conjecture: str
+    ) -> PathVerdict:
+        try:
+            from google import genai
 
-def _openai_enabled() -> bool:
-    return os.environ.get("OPENAI_ENABLED", "false").lower() in ("true", "1", "yes")
+            client = genai.Client()
+            prompt = INTENT_DIRECT_USER_TEMPLATE.format(
+                lean_code=lean_code,
+                original_idea=original_idea,
+                conjecture=conjecture,
+            )
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"{INTENT_DIRECT_SYSTEM_PROMPT}\n\n{prompt}",
+                config={"temperature": 0.0},
+            )
+            content = response.text or ""
+            return _parse_path_verdict(VerificationPath.GOOGLE, content, self._llm)
+        except Exception as exc:
+            log.warning("google_path_failed", error=str(exc))
+            return PathVerdict(
+                path=VerificationPath.GOOGLE,
+                verdict=IntentVerdictType.CORRECT,
+                concerns=[],
+                confidence=0.0,
+                reasoning=f"Google path failed: {exc}",
+            )
+
+    def _run_secondary_path(
+        self,
+        provider: str,
+        model: str,
+        lean_code: str,
+        original_idea: str,
+        conjecture: str,
+    ) -> PathVerdict:
+        if provider == "openai":
+            return self._run_openai_path(lean_code, original_idea, conjecture)
+        if provider == "google":
+            return self._run_google_path(lean_code, original_idea, conjecture)
+        log.warning("unknown_secondary_provider", provider=provider)
+        return PathVerdict(
+            path=VerificationPath.DIRECT,
+            verdict=IntentVerdictType.CORRECT,
+            concerns=[],
+            confidence=0.0,
+            reasoning=f"Unknown provider: {provider}",
+        )
+
+
+def _detect_secondary_model() -> tuple[str, str] | None:
+    if os.environ.get("OPENAI_API_KEY"):
+        return ("openai", "gpt-4o")
+    if os.environ.get("GOOGLE_API_KEY"):
+        return ("google", "gemini-2.5-flash")
+    return None
 
 
 def _parse_path_verdict(

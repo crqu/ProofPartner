@@ -99,7 +99,7 @@ class IntentJudge(BaseAgent):
         path_verdicts.append(adversarial)
 
         if _openai_enabled():
-            openai_verdict = self._run_openai_path(lean_code, original_idea, conjecture)
+            openai_verdict = self._run_openai_path(cleaned_code, original_idea, conjecture)
             path_verdicts.append(openai_verdict)
 
         return self._adjudicate(
@@ -359,7 +359,7 @@ def _run_fp_review(
             log.warning("fp_review_parse_failed", reason="expected JSON array")
             return None
 
-        return [
+        result = [
             ConcernClassification(
                 concern=str(item.get("concern", "")),
                 classification=item.get("classification", "genuine_error"),
@@ -369,6 +369,10 @@ def _run_fp_review(
             if isinstance(item, dict)
             and item.get("classification") in ("false_positive", "genuine_error")
         ]
+        if not result and concerns:
+            log.warning("fp_review_empty_classifications", concern_count=len(concerns))
+            return None
+        return result
     except Exception as exc:
         log.warning("fp_review_failed", error=str(exc))
         return None

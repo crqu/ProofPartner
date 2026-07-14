@@ -855,6 +855,45 @@ class TestFalsePositiveReview:
         assert verdict.overall_verdict == IntentVerdictType.INCORRECT
         assert verdict.dismissed_concerns == []
 
+    def test_unexpected_classifications_treated_as_genuine(self):
+        """LLM returns unexpected classification values → empty after filter → INCORRECT."""
+        fp_response = _fp_review_json([
+            {"concern": "missing hypothesis",
+             "classification": "maybe_error",
+             "reasoning": "not sure"},
+        ])
+        judge = self._make_judge_with_fp_review([
+            "Back translation.",
+            _CORRECT_JSON,
+            _INCORRECT_JSON,
+            _CORRECT_JSON,
+        ], fp_response)
+        verdict = judge.judge(
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+        )
+        assert verdict.overall_verdict == IntentVerdictType.INCORRECT
+        assert verdict.dismissed_concerns == []
+
+    def test_run_fp_review_returns_none_on_empty_classifications(self):
+        """_run_fp_review returns None when all classifications are unexpected."""
+        from agentic_research.agents.intent_judge import _run_fp_review
+
+        fp_response = _fp_review_json([
+            {"concern": "c1", "classification": "uncertain", "reasoning": "dunno"},
+            {"concern": "c2", "classification": "maybe", "reasoning": "idk"},
+        ])
+        llm = _make_mock_llm_with_json([fp_response])
+        result = _run_fp_review(
+            llm,
+            lean_code="theorem t : True := trivial",
+            original_idea="idea",
+            conjecture="conjecture",
+            concerns=["c1", "c2"],
+        )
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # HintCleaner wiring in IntentJudge

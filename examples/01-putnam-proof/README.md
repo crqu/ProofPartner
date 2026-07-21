@@ -50,10 +50,19 @@ The Prover agent searches for a proof, which requires two parts:
 **What to look for in the output:**
 - Budget confirmation prompt (proof search is the most expensive stage)
 - Progress updates with running cost
-- `PROVED` status if the proof search succeeds
-- The proof tactics in the final Lean 4 block
-- Claim check result
-- End-of-run summary with total cost and timing
+- The prover's decomposition into lemmas (n=1 existence, n=2 mod-4 descent, n≥3 impossibility)
+- `PROOF FAILED` status — the recursive prover got stuck on the set equality goal
+
+### Outcome: Partial Success
+
+In this run, **exploration succeeded** (correctly identifying the answer as {1} with high confidence) but **proof search failed**. This is an honest result — Putnam competition problems are at the frontier of what automated provers can handle. The pipeline correctly:
+
+- Identified the problem domain (Number Theory / Diophantine Equations)
+- Generated the correct answer ({1}) as conjecture #5
+- Decomposed the proof into the right lemmas
+- But could not formalize individual lemmas into compiling Lean 4 code
+
+This demonstrates both ProofPartner's strengths (exploration, conjecture generation) and current limitations (formal proof of competition-level problems).
 
 ### Mathematical approach
 

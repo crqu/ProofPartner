@@ -37,6 +37,7 @@ from agentic_research.models.formalization import (
     TypeFormalizationResult,
     TypePlan,
 )
+from agentic_research.models.interaction import InteractionOption, InteractionRequest, InteractionResponse
 from agentic_research.models.agents import ProverConfig
 from agentic_research.cache.formalization_cache import CachedFormalization, FormalizationCache
 from agentic_research.tools.lean_repl import LeanRepl
@@ -62,6 +63,7 @@ class FormalizationPipeline:
         prover_config: ProverConfig | None = None,
         artifact_dir: Path | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
+        interaction_callback: Callable[[InteractionRequest], InteractionResponse] | None = None,
         use_intent_judge: bool = False,
         formalization_cache: FormalizationCache | None = None,
         lean_toolchain: str = "",
@@ -74,6 +76,7 @@ class FormalizationPipeline:
         self._prover_config = prover_config
         self._artifact_dir = artifact_dir
         self._progress_callback = progress_callback
+        self._interaction_callback = interaction_callback
         self._use_intent_judge = use_intent_judge
         self._cache = formalization_cache
         self._lean_toolchain = lean_toolchain
@@ -294,6 +297,14 @@ class FormalizationPipeline:
             auction_result = self._auction_type(
                 candidate, lemmas, prior_definitions
             )
+
+            if (
+                self._interaction_callback is not None
+                and auction_result.verdict == AuctionVerdict.ACCEPTED
+                and auction_result.all_candidates
+            ):
+                auction_result = self._apply_interactive_selection(auction_result)
+
             auction_results.append(auction_result)
 
             if auction_result.verdict == AuctionVerdict.ACCEPTED and auction_result.winning_candidate:
@@ -325,6 +336,71 @@ class FormalizationPipeline:
             all_types_accepted=(len(accepted) + len(data_packages)) == len(new_types),
             total_proved_lemmas=total_proved,
             total_failed_lemmas=total_failed,
+        )
+
+    def _apply_interactive_selection(self, auction_result: AuctionResult) -> AuctionResult:
+        """Let the user override the auctioneer's pick via interaction_callback."""
+        assert self._interaction_callback is not None
+
+        scores_by_id = {s.candidate_id: s for s in auction_result.scores}
+        options: list[InteractionOption] = []
+        for c in auction_result.all_candidates:
+            score = scores_by_id.get(c.candidate_id)
+            sig = c.lean_code.split("\n")[0] if c.lean_code else "(empty)"
+            label = (
+                f"#{c.candidate_id + 1}: {sig}  "
+                f"[score={score.total_score:.3f}, lemmas={c.total_lemma_count}]"
+                if score
+                else f"#{c.candidate_id + 1}: {sig}"
+            )
+            options.append(InteractionOption(
+                label=label,
+                value=c.candidate_id,
+                score=score.total_score if score else 0.0,
+            ))
+
+        options.sort(key=lambda o: o.score, reverse=True)
+
+        default_id = auction_result.winner_id
+        request = InteractionRequest(
+            type="select",
+            prompt=f"Select type formalization for '{auction_result.type_name}'",
+            options=options,
+            default_value=default_id,
+        )
+
+        response = self._interaction_callback(request)
+
+        if response.aborted or response.selected_value is None:
+            log.info("interactive_selection_aborted", type_name=auction_result.type_name)
+            return auction_result
+
+        selected_id = response.selected_value
+        if selected_id == auction_result.winner_id:
+            return auction_result
+
+        selected = next(
+            (c for c in auction_result.all_candidates if c.candidate_id == selected_id),
+            None,
+        )
+        if selected is None:
+            log.warning("interactive_selection_invalid", selected_id=selected_id)
+            return auction_result
+
+        log.info(
+            "interactive_selection_override",
+            type_name=auction_result.type_name,
+            original_winner=auction_result.winner_id,
+            user_pick=selected_id,
+        )
+        return AuctionResult(
+            type_name=auction_result.type_name,
+            verdict=AuctionVerdict.ACCEPTED,
+            winner_id=selected_id,
+            scores=auction_result.scores,
+            winning_candidate=selected,
+            all_candidates=auction_result.all_candidates,
+            reason=f"User selected candidate {selected_id} (interactive override)",
         )
 
     def _make_intent_judge(self) -> IntentJudge | None:

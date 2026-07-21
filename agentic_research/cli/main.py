@@ -104,6 +104,45 @@ def _record_agent_tokens(cost_tracker, agent) -> None:
     )
 
 
+def _build_interaction_callback(console: Console):
+    """Build a TTY-based interaction callback using rich prompts."""
+    from rich.prompt import IntPrompt
+    from rich.table import Table as RichTable
+
+    from agentic_research.models.interaction import InteractionRequest, InteractionResponse
+
+    def callback(request: InteractionRequest) -> InteractionResponse:
+        table = RichTable(title=request.prompt)
+        table.add_column("#", style="bold", width=3)
+        table.add_column("Candidate", min_width=40)
+        table.add_column("Score", justify="right", width=10)
+        for i, option in enumerate(request.options, 1):
+            table.add_row(str(i), option.label, f"{option.score:.3f}")
+        console.print(table)
+
+        choice = IntPrompt.ask(
+            f"Select candidate [1-{len(request.options)}, 0 to abort]",
+            default=0,
+            console=console,
+        )
+
+        if choice == 0:
+            return InteractionResponse(
+                selected_value=request.default_value,
+                aborted=True,
+            )
+        if 1 <= choice <= len(request.options):
+            return InteractionResponse(
+                selected_value=request.options[choice - 1].value,
+            )
+        return InteractionResponse(
+            selected_value=request.default_value,
+            aborted=True,
+        )
+
+    return callback
+
+
 def _print_cost_summary(cost_tracker: CostTracker, budget: float) -> None:
     table = Table(title="Cost Summary", show_header=False)
     table.add_column("Label", style="bold")
@@ -280,8 +319,9 @@ def explore_cmd(ctx: click.Context, idea: str, budget: float) -> None:
 @click.option("--artifact-dir", type=click.Path(), default=None, help="Directory to save theorem artifacts")
 @click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
 @click.option("--cache-dir", type=click.Path(), default=None, help="Directory for formalization cache DB")
+@click.option("--interactive", is_flag=True, default=False, help="Pause at decision points for user input")
 @click.pass_context
-def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_dir: str | None, allow_mock: bool, cache_dir: str | None) -> None:
+def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_dir: str | None, allow_mock: bool, cache_dir: str | None, interactive: bool) -> None:
     """Formalize a natural language conjecture into Lean 4.
 
     Runs FormalizationPipeline + IntentJudge. Takes a natural language
@@ -298,6 +338,11 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
 
     from agentic_research.agents.informalizer import Informalizer
     from agentic_research.agents.intent_judge import IntentJudge
+
+    if interactive and not sys.stdin.isatty():
+        raise click.ClickException("--interactive requires a TTY (not available in this environment)")
+
+    interaction_cb = _build_interaction_callback(console) if interactive else None
 
     cost_tracker = _create_cost_tracker()
     session = _load_or_create_session()
@@ -347,6 +392,7 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
             llm_client=llm, lean_repl=lean_repl, lean_search=lean_search,
             artifact_dir=Path(artifact_dir) if artifact_dir else None,
             progress_callback=on_formalize_progress,
+            interaction_callback=interaction_cb,
             formalization_cache=formalization_cache,
             lean_toolchain=lean_toolchain,
         )
@@ -457,14 +503,18 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float, allow_mock
 @click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
 @click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
 @click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
+@click.option("--interactive", is_flag=True, default=False, help="Pause at decision points for user input")
 @click.pass_context
-def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool, allow_mock: bool) -> None:
+def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool, allow_mock: bool, interactive: bool) -> None:
     """Attempt to prove a Lean 4 statement.
 
     Runs ProofPipeline with confirmation prompt before starting.
     Shows real-time progress with cost. Hard-stops when budget exceeded
     or timeout reached.
     """
+    if interactive and not sys.stdin.isatty():
+        raise click.ClickException("--interactive requires a TTY (not available in this environment)")
+
     from agentic_research.tools.lean_repl import LeanRepl, ReplConfig, require_backend
 
     try:
@@ -580,14 +630,18 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 @click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
 @click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
 @click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
+@click.option("--interactive", is_flag=True, default=False, help="Pause at decision points for user input")
 @click.pass_context
-def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int, use_critic: bool, use_detailer: bool, allow_mock: bool) -> None:
+def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int, use_critic: bool, use_detailer: bool, allow_mock: bool, interactive: bool) -> None:
     """Run the full explore-conjecture-prove research loop.
 
     Automatically explores the idea, generates conjectures, formalizes them
     into Lean 4, checks for counterexamples, attempts proofs, and refines
     on failure. Creates checkpoints at each stage for resumability.
     """
+    if interactive and not sys.stdin.isatty():
+        raise click.ClickException("--interactive requires a TTY (not available in this environment)")
+
     from agentic_research.tools.lean_repl import LeanRepl, ReplConfig, require_backend
 
     try:
@@ -596,10 +650,7 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
         click.echo(str(e), err=True)
         raise SystemExit(1)
 
-    from agentic_research.models.session import (
-        OrchestratorConfig,
-        PipelineStage,
-    )
+    from agentic_research.models.session import OrchestratorConfig
     from agentic_research.orchestrator.engine import ResearchOrchestrator
 
     if not click.confirm(
@@ -608,6 +659,8 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
     ):
         console.print("Aborted.")
         return
+
+    interaction_cb = _build_interaction_callback(console) if interactive else None
 
     try:
         llm = _create_llm_client(model=ctx.obj.get("model"))
@@ -644,6 +697,7 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
             lean_search=lean_search,
             config=config,
             progress_callback=on_research_progress,
+            interaction_callback=interaction_cb,
         )
 
         try:
@@ -653,34 +707,9 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
             console.print("\n[yellow]Interrupted.[/yellow]")
             result = orchestrator._build_result(idea)
 
-    if result.final_stage == PipelineStage.COMPLETE:
-        console.print("\n[green bold]RESEARCH COMPLETE[/green bold]")
-    else:
-        console.print("\n[yellow bold]RESEARCH INCOMPLETE[/yellow bold]")
+    from agentic_research.cli.summary import format_run_summary
 
-    stats_table = Table(title="Research Results", show_header=False)
-    stats_table.add_column("Metric", style="bold")
-    stats_table.add_column("Value")
-    stats_table.add_row("Stage reached", result.final_stage.value)
-    stats_table.add_row("Conjectures tried", str(result.total_conjectures_tried))
-    stats_table.add_row("Proofs attempted", str(result.total_refinements + len(result.proved_conjectures) + len(result.failed_conjectures)))
-    stats_table.add_row("Proofs succeeded", str(len(result.proved_conjectures)))
-    stats_table.add_row("Total cost", f"${result.cost_estimate.total_cost_usd:.4f}")
-    console.print(stats_table)
-
-    if result.proved_conjectures:
-        proved_table = Table(title="Proved Conjectures")
-        proved_table.add_column("Conjecture", style="cyan")
-        proved_table.add_column("Lean Statement", style="green")
-        for tc in result.proved_conjectures:
-            stmt = tc.conjecture.statement
-            if len(stmt) > 80:
-                stmt = stmt[:77] + "..."
-            lean = tc.lean_statement
-            if len(lean) > 80:
-                lean = lean[:77] + "..."
-            proved_table.add_row(stmt, lean)
-        console.print(proved_table)
+    format_run_summary(result, console)
 
     console.print(f"\n[dim]Session: {result.session_id}[/dim]")
     console.print(f"[dim]Resume with: agentic-research resume {result.session_id}[/dim]")

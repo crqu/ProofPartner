@@ -186,6 +186,8 @@ class Auctioneer(BaseAgent):
                     type_candidate.name, all_candidates,
                 )
 
+        auction_result.all_candidates = all_candidates
+
         log.info(
             "auctioneer_done",
             type_name=type_candidate.name,

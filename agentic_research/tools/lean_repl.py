@@ -78,6 +78,19 @@ def detect_backend() -> ReplBackend:
     return ReplBackend.MOCK
 
 
+def require_backend(allow_mock: bool = False) -> ReplBackend:
+    """Detect the Lean backend and enforce a real backend unless mock is explicitly allowed."""
+    backend = detect_backend()
+    if backend == ReplBackend.MOCK:
+        if not allow_mock:
+            raise RuntimeError(
+                "Lean 4 not found on PATH. Proof verification requires a real Lean backend. "
+                "Use --allow-mock to proceed without verification (results will NOT be verified)."
+            )
+        log.warning("lean_repl_mock_mode_allowed")
+    return backend
+
+
 def _parse_lean_errors(output: str) -> tuple[list[str], list[str]]:
     """Extract error and warning messages from Lean compiler output."""
     errors: list[str] = []

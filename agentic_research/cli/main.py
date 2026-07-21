@@ -7,7 +7,6 @@ real-time cost with rich.
 
 from __future__ import annotations
 
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -105,15 +104,6 @@ def _record_agent_tokens(cost_tracker, agent) -> None:
     )
 
 
-def _warn_if_lean_missing() -> None:
-    if shutil.which("lean") is None:
-        click.echo(
-            "Warning: Lean 4 not found on PATH. "
-            "Proof checking will fall back to mock mode. "
-            "Install Lean 4 via https://leanprover.github.io/lean4/doc/setup.html"
-        )
-
-
 def _print_cost_summary(cost_tracker: CostTracker, budget: float) -> None:
     table = Table(title="Cost Summary", show_header=False)
     table.add_column("Label", style="bold")
@@ -147,6 +137,7 @@ def cli(ctx: click.Context, json_logs: bool, log_level: str, model: str | None) 
 @click.option("--seed", type=int, default=0, help="Random seed for sampling")
 @click.option("--data-dir", type=click.Path(), default="data/benchmarks")
 @click.option("--output", "-o", type=click.Path(), default=None, help="Write JSON report to file")
+@click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
 @click.pass_context
 def eval_cmd(
     ctx: click.Context,
@@ -158,10 +149,18 @@ def eval_cmd(
     seed: int,
     data_dir: str,
     output: str | None,
+    allow_mock: bool,
 ) -> None:
     """Run benchmark evaluation."""
     from agentic_research.eval.runner import run_eval
     from agentic_research.models.eval import BenchmarkSource, EvalConfig, EvalMode, ProblemSplit
+    from agentic_research.tools.lean_repl import require_backend
+
+    try:
+        require_backend(allow_mock=allow_mock)
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
 
     config = EvalConfig(
         mode=EvalMode(mode),
@@ -279,15 +278,23 @@ def explore_cmd(ctx: click.Context, idea: str, budget: float) -> None:
 @click.argument("conjecture")
 @click.option("--budget", type=float, default=3.00, help="Budget in USD (default: $3.00)")
 @click.option("--artifact-dir", type=click.Path(), default=None, help="Directory to save theorem artifacts")
+@click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
+@click.option("--cache-dir", type=click.Path(), default=None, help="Directory for formalization cache DB")
 @click.pass_context
-def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_dir: str | None) -> None:
+def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_dir: str | None, allow_mock: bool, cache_dir: str | None) -> None:
     """Formalize a natural language conjecture into Lean 4.
 
     Runs FormalizationPipeline + IntentJudge. Takes a natural language
     conjecture, produces a Lean 4 statement with type-first formalization,
     and runs intent verification.
     """
-    _warn_if_lean_missing()
+    from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig, require_backend
+
+    try:
+        backend = require_backend(allow_mock=allow_mock)
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
 
     from agentic_research.agents.informalizer import Informalizer
     from agentic_research.agents.intent_judge import IntentJudge
@@ -295,9 +302,25 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
     cost_tracker = _create_cost_tracker()
     session = _load_or_create_session()
 
+    lean_toolchain = "mock"
+    if backend != ReplBackend.MOCK:
+        import subprocess as _sp
+        try:
+            lean_ver = _sp.run(["lean", "--version"], capture_output=True, text=True, timeout=10)
+            lean_toolchain = lean_ver.stdout.strip() if lean_ver.returncode == 0 else ""
+        except Exception:
+            lean_toolchain = ""
+
+    formalization_cache = None
+    cache_db_path = Path(cache_dir) / "formalization_cache.db" if cache_dir else None
+    default_cache_path = Path.home() / ".proofpartner" / "formalization_cache.db"
+    if cache_db_path or default_cache_path.exists():
+        from agentic_research.cache.formalization_cache import FormalizationCache
+        formalization_cache = FormalizationCache(db_path=cache_db_path)
+
     try:
         llm = _create_llm_client(model=ctx.obj.get("model"))
-        lean_repl = _create_lean_repl()
+        lean_repl = LeanRepl(ReplConfig(backend=backend))
         lean_search = _create_lean_search()
     except Exception as e:
         console.print(f"[red]Setup error:[/red] {e}")
@@ -324,6 +347,8 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
             llm_client=llm, lean_repl=lean_repl, lean_search=lean_search,
             artifact_dir=Path(artifact_dir) if artifact_dir else None,
             progress_callback=on_formalize_progress,
+            formalization_cache=formalization_cache,
+            lean_toolchain=lean_toolchain,
         )
         form_result = pipeline.run(conjecture_nl=conjecture)
 
@@ -373,8 +398,9 @@ def formalize_cmd(ctx: click.Context, conjecture: str, budget: float, artifact_d
 @cli.command("check")
 @click.argument("lean_statement")
 @click.option("--budget", type=float, default=2.00, help="Budget in USD (default: $2.00)")
+@click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
 @click.pass_context
-def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
+def check_cmd(ctx: click.Context, lean_statement: str, budget: float, allow_mock: bool) -> None:
     """Search for counterexamples to a Lean 4 statement.
 
     Runs CounterexampleSearcher. Returns PLAUSIBLE (no counterexample found)
@@ -382,12 +408,19 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
     """
     from agentic_research.agents.counterexample_searcher import CounterexampleSearcher
     from agentic_research.models.verification import CounterexampleStatus
+    from agentic_research.tools.lean_repl import LeanRepl, ReplConfig, require_backend
+
+    try:
+        backend = require_backend(allow_mock=allow_mock)
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
 
     cost_tracker = _create_cost_tracker()
 
     try:
         llm = _create_llm_client(model=ctx.obj.get("model"))
-        lean_repl = _create_lean_repl()
+        lean_repl = LeanRepl(ReplConfig(backend=backend))
     except Exception as e:
         console.print(f"[red]Setup error:[/red] {e}")
         sys.exit(1)
@@ -423,15 +456,22 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float) -> None:
 )
 @click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
 @click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
+@click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
 @click.pass_context
-def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool) -> None:
+def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool, allow_mock: bool) -> None:
     """Attempt to prove a Lean 4 statement.
 
     Runs ProofPipeline with confirmation prompt before starting.
     Shows real-time progress with cost. Hard-stops when budget exceeded
     or timeout reached.
     """
-    _warn_if_lean_missing()
+    from agentic_research.tools.lean_repl import LeanRepl, ReplConfig, require_backend
+
+    try:
+        lean_backend = require_backend(allow_mock=allow_mock)
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
 
     import os
 
@@ -464,7 +504,7 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 
     try:
         llm = _create_llm_client(model=ctx.obj.get("model"))
-        lean_repl = _create_lean_repl()
+        lean_repl = LeanRepl(ReplConfig(backend=lean_backend))
         lean_search = _create_lean_search()
     except Exception as e:
         console.print(f"[red]Setup error:[/red] {e}")
@@ -539,15 +579,22 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
 @click.option("--max-refinements", type=int, default=3, callback=_validate_non_negative, help="Max refinement attempts per conjecture (default: 3)")
 @click.option("--use-critic/--no-critic", default=True, help="Enable ProofCritic for lemma decomposition review (default: enabled)")
 @click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
+@click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
 @click.pass_context
-def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int, use_critic: bool, use_detailer: bool) -> None:
+def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: int, max_refinements: int, use_critic: bool, use_detailer: bool, allow_mock: bool) -> None:
     """Run the full explore-conjecture-prove research loop.
 
     Automatically explores the idea, generates conjectures, formalizes them
     into Lean 4, checks for counterexamples, attempts proofs, and refines
     on failure. Creates checkpoints at each stage for resumability.
     """
-    _warn_if_lean_missing()
+    from agentic_research.tools.lean_repl import LeanRepl, ReplConfig, require_backend
+
+    try:
+        lean_backend = require_backend(allow_mock=allow_mock)
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
 
     from agentic_research.models.session import (
         OrchestratorConfig,
@@ -564,7 +611,7 @@ def research_cmd(ctx: click.Context, idea: str, budget: float, max_conjectures: 
 
     try:
         llm = _create_llm_client(model=ctx.obj.get("model"))
-        lean_repl = _create_lean_repl()
+        lean_repl = LeanRepl(ReplConfig(backend=lean_backend))
         lean_search = _create_lean_search()
     except Exception as e:
         console.print(f"[red]Setup error:[/red] {e}")

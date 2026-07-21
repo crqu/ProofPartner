@@ -38,6 +38,7 @@ from agentic_research.models.formalization import (
     TypePlan,
 )
 from agentic_research.models.agents import ProverConfig
+from agentic_research.cache.formalization_cache import CachedFormalization, FormalizationCache
 from agentic_research.tools.lean_repl import LeanRepl
 from agentic_research.tools.lean_search import LeanSearch
 
@@ -62,6 +63,8 @@ class FormalizationPipeline:
         artifact_dir: Path | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
         use_intent_judge: bool = False,
+        formalization_cache: FormalizationCache | None = None,
+        lean_toolchain: str = "",
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -72,6 +75,8 @@ class FormalizationPipeline:
         self._artifact_dir = artifact_dir
         self._progress_callback = progress_callback
         self._use_intent_judge = use_intent_judge
+        self._cache = formalization_cache
+        self._lean_toolchain = lean_toolchain
         self._total_tokens = TokenUsage()
         self._conjecture_nl: str = ""
 
@@ -244,7 +249,23 @@ class FormalizationPipeline:
         data_packages: list[DataPackageCandidate] = []
 
         for candidate in ordered:
-            # Check if this type has 0 Loogle results — if so, suggest a data package
+            if self._cache:
+                cache_hit = self._cache.get(candidate.name, self._lean_toolchain)
+                if cache_hit:
+                    prior_definitions = (
+                        f"{prior_definitions}\n\n{cache_hit.lean_code}"
+                        if prior_definitions
+                        else cache_hit.lean_code
+                    )
+                    accepted.append(TypeFormalizationCandidate(
+                        candidate_id=0,
+                        type_name=candidate.name,
+                        lean_code=cache_hit.lean_code,
+                        compiles=True,
+                        auxiliary_lemmas=[],
+                    ))
+                    continue
+
             search_result = self._search.execute(candidate.name)
             search_entries = getattr(search_result, "entries", [])
 
@@ -285,6 +306,15 @@ class FormalizationPipeline:
                 )
                 total_proved += winner.proved_count
                 total_failed += winner.total_lemma_count - winner.proved_count
+                if self._cache and winner:
+                    self._cache.put(CachedFormalization(
+                        type_name=candidate.name,
+                        type_signature=winner.lean_code.split("\n")[0] if winner.lean_code else "",
+                        lean_code=winner.lean_code,
+                        lean_toolchain=self._lean_toolchain,
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                        proved_lemmas=[],
+                    ))
             else:
                 total_failed += len(lemmas)
 

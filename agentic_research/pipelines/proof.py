@@ -56,7 +56,7 @@ from agentic_research.models.proof import (
     RecursiveProofResult,
 )
 from agentic_research.models.verification import IntentVerdictType
-from agentic_research.tools.lean_repl import LeanRepl
+from agentic_research.tools.lean_repl import LeanRepl, ReplBackend
 from agentic_research.tools.lean_search import LeanSearch
 
 log = get_logger(__name__)
@@ -108,6 +108,14 @@ class ProofPipeline:
         self._lean_preamble: str | None = None
         self._prebuilt_axioms: dict[str, str] | None = None
         self._axiom_keywords: dict[str, list[str]] | None = None
+
+    def _make_result(self, **kwargs) -> ProofPipelineResult:
+        """Construct a ProofPipelineResult with backend info pre-filled."""
+        backend = getattr(self._repl, "backend", None)
+        if isinstance(backend, ReplBackend):
+            kwargs.setdefault("backend", backend.value)
+            kwargs.setdefault("verified", backend != ReplBackend.MOCK)
+        return ProofPipelineResult(**kwargs)
 
     def _notify_progress(self, stage: str, message: str) -> None:
         if self._progress_callback is not None:
@@ -169,7 +177,7 @@ class ProofPipeline:
                 tactic=tactic,
                 elapsed_seconds=round(tactic_elapsed, 3),
             )
-            return ProofPipelineResult(
+            return self._make_result(
                 statement=lean_statement,
                 proved=True,
                 final_proof=proof_code,
@@ -198,7 +206,7 @@ class ProofPipeline:
 
             if direct_ok:
                 log.info("proof_pipeline_direct_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
-                return ProofPipelineResult(
+                return self._make_result(
                     statement=lean_statement,
                     proved=True,
                     final_proof=search_result.proof_code,
@@ -226,7 +234,7 @@ class ProofPipeline:
 
                     if corrected_ok:
                         log.info("proof_pipeline_corrected_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
-                        return ProofPipelineResult(
+                        return self._make_result(
                             statement=lean_statement,
                             proved=True,
                             final_proof=corrected_result.proof_code,
@@ -261,7 +269,7 @@ class ProofPipeline:
             tactic_hints=tactic_hints,
         )
         if tree is None:
-            return ProofPipelineResult(
+            return self._make_result(
                 statement=lean_statement,
                 search_result=search_result,
                 failure_stage="lemma_breakdown",
@@ -288,7 +296,7 @@ class ProofPipeline:
                     critic_issues = critique.issues
 
             if tree is None:
-                return ProofPipelineResult(
+                return self._make_result(
                     statement=lean_statement,
                     search_result=search_result,
                     failure_stage="proof_critic",
@@ -311,7 +319,7 @@ class ProofPipeline:
         self._notify_progress("Leanification", "Converting lemmas to Lean 4")
         tree = self._run_lemma_leanifier(tree, tactic_hints=tactic_hints)
         if tree is None:
-            return ProofPipelineResult(
+            return self._make_result(
                 statement=lean_statement,
                 search_result=search_result,
                 failure_stage="lemma_leanifier",
@@ -373,7 +381,7 @@ class ProofPipeline:
                         backtrack_result.backtrack_stages.append("nl_proof")
                         return backtrack_result
 
-            return ProofPipelineResult(
+            return self._make_result(
                 statement=lean_statement,
                 search_result=search_result,
                 recursive_result=recursive_result,
@@ -385,7 +393,7 @@ class ProofPipeline:
         self._notify_progress("Finalization", "Assembling final proof")
         final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
         if not final_proof:
-            return ProofPipelineResult(
+            return self._make_result(
                 statement=lean_statement,
                 search_result=search_result,
                 recursive_result=recursive_result,
@@ -397,7 +405,7 @@ class ProofPipeline:
         if self._use_claim_check:
             passed = self._run_claim_check(lean_statement, final_proof)
             if not passed:
-                return ProofPipelineResult(
+                return self._make_result(
                     statement=lean_statement,
                     search_result=search_result,
                     recursive_result=recursive_result,
@@ -408,7 +416,7 @@ class ProofPipeline:
                 )
 
         log.info("proof_pipeline_recursive_success", elapsed_seconds=round(time.monotonic() - pipeline_start, 3))
-        return ProofPipelineResult(
+        return self._make_result(
             statement=lean_statement,
             proved=True,
             final_proof=final_proof,
@@ -440,7 +448,7 @@ class ProofPipeline:
                 return None
 
         log.info("external_prover_success")
-        return ProofPipelineResult(
+        return self._make_result(
             statement=lean_statement,
             proved=True,
             final_proof=ext_result.proof_code,
@@ -936,7 +944,7 @@ class ProofPipeline:
                     "proof_pipeline_subtree_graft_success",
                     elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
                 )
-                return ProofPipelineResult(
+                return self._make_result(
                     statement=lean_statement,
                     proved=True,
                     final_proof=final_proof,
@@ -1001,7 +1009,7 @@ class ProofPipeline:
                     if self._use_claim_check:
                         passed = self._run_claim_check(lean_statement, final_proof)
                         if not passed:
-                            return ProofPipelineResult(
+                            return self._make_result(
                                 statement=lean_statement,
                                 search_result=search_result,
                                 recursive_result=recursive_result,
@@ -1016,7 +1024,7 @@ class ProofPipeline:
                         attempt=attempt + 1,
                         elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
                     )
-                    return ProofPipelineResult(
+                    return self._make_result(
                         statement=lean_statement,
                         proved=True,
                         final_proof=final_proof,
@@ -1142,7 +1150,7 @@ class ProofPipeline:
             "proof_pipeline_backtrack_type_success",
             elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
         )
-        return ProofPipelineResult(
+        return self._make_result(
             statement=lean_statement,
             proved=True,
             final_proof=final_proof,
@@ -1211,7 +1219,7 @@ class ProofPipeline:
             "proof_pipeline_backtrack_nl_success",
             elapsed_seconds=round(time.monotonic() - pipeline_start, 3),
         )
-        return ProofPipelineResult(
+        return self._make_result(
             statement=lean_statement,
             proved=True,
             final_proof=final_proof,

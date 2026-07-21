@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from agentic_research.cli.main import cli
+from agentic_research.tools.lean_repl import ReplBackend
 
 
 @pytest.fixture
@@ -217,15 +218,15 @@ class TestFormalizeCommand:
         )
 
         with (
+            patch("agentic_research.tools.lean_repl.detect_backend", return_value=ReplBackend.MOCK),
             patch("agentic_research.cli.main._create_llm_client") as mock_llm,
-            patch("agentic_research.cli.main._create_lean_repl"),
             patch("agentic_research.cli.main._create_lean_search"),
             patch("agentic_research.pipelines.formalization.FormalizationPipeline.run", return_value=form_result),
             patch("agentic_research.agents.intent_judge.IntentJudge.judge", return_value=intent_verdict),
             patch("agentic_research.agents.intent_judge.IntentJudge.cumulative_tokens", new_callable=lambda: property(lambda self: MagicMock(input_tokens=100, output_tokens=50, cache_read_input_tokens=0, cache_creation_input_tokens=0))),
         ):
             mock_llm.return_value = MagicMock()
-            result = runner.invoke(cli, ["formalize", "every prime > 2 is odd"])
+            result = runner.invoke(cli, ["formalize", "--allow-mock", "every prime > 2 is odd"])
 
         assert result.exit_code == 0
         assert "CORRECT" in result.output
@@ -531,33 +532,34 @@ class TestResumeCommand:
 
 
 class TestLeanNotFoundWarning:
-    def test_formalize_warns_when_lean_missing(self, runner, tmp_session_dir):
-        with patch("agentic_research.cli.main.shutil.which", return_value=None):
+    def test_formalize_exits_when_lean_missing(self, runner, tmp_session_dir):
+        with patch("agentic_research.tools.lean_repl.detect_backend", return_value=ReplBackend.MOCK):
             result = runner.invoke(cli, ["formalize", "test conjecture"])
-        assert "Warning: Lean 4 not found" in result.output
+        assert result.exit_code == 1
 
-    def test_prove_warns_when_lean_missing(self, runner, tmp_session_dir):
-        with patch("agentic_research.cli.main.shutil.which", return_value=None):
-            result = runner.invoke(cli, ["prove", "theorem test : True := trivial"], input="n\n")
-        assert "Warning: Lean 4 not found" in result.output
+    def test_prove_exits_when_lean_missing(self, runner, tmp_session_dir):
+        with patch("agentic_research.tools.lean_repl.detect_backend", return_value=ReplBackend.MOCK):
+            result = runner.invoke(cli, ["prove", "theorem test : True := trivial"])
+        assert result.exit_code == 1
 
-    def test_research_warns_when_lean_missing(self, runner, tmp_session_dir):
-        with patch("agentic_research.cli.main.shutil.which", return_value=None):
-            result = runner.invoke(cli, ["research", "test idea"], input="n\n")
-        assert "Warning: Lean 4 not found" in result.output
+    def test_research_exits_when_lean_missing(self, runner, tmp_session_dir):
+        with patch("agentic_research.tools.lean_repl.detect_backend", return_value=ReplBackend.MOCK):
+            result = runner.invoke(cli, ["research", "test idea"])
+        assert result.exit_code == 1
 
-    def test_explore_does_not_warn_about_lean(self, runner, tmp_session_dir):
+    def test_explore_does_not_check_lean(self, runner, tmp_session_dir):
         with (
-            patch("agentic_research.cli.main.shutil.which", return_value=None),
+            patch("agentic_research.tools.lean_repl.detect_backend", return_value=ReplBackend.MOCK),
             patch("agentic_research.cli.main._create_llm_client", side_effect=Exception("stop early")),
         ):
             result = runner.invoke(cli, ["explore", "test idea"])
-        assert "Warning: Lean 4 not found" not in result.output
+        # explore doesn't use require_backend, so it should not exit with mock guard error
+        assert "Lean 4 not found" not in result.output
 
-    def test_no_warning_when_lean_present(self, runner, tmp_session_dir):
-        with patch("agentic_research.cli.main.shutil.which", return_value="/usr/bin/lean"):
+    def test_no_error_when_lean_present(self, runner, tmp_session_dir):
+        with patch("agentic_research.tools.lean_repl.detect_backend", return_value=ReplBackend.SUBPROCESS):
             result = runner.invoke(cli, ["formalize", "test conjecture"])
-        assert "Warning: Lean 4 not found" not in result.output
+        assert "Lean 4 not found" not in result.output
 
 
 class TestInputValidation:

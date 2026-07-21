@@ -158,6 +158,10 @@ class AuctionResult(BaseModel):
     winner_id: int | None = None
     scores: list[AuctionScore] = Field(default_factory=list)
     winning_candidate: TypeFormalizationCandidate | None = None
+    all_candidates: list[TypeFormalizationCandidate] = Field(
+        default_factory=list,
+        description="All evaluated candidates (populated for interactive steering)",
+    )
     reason: str = Field(default="", description="Why this candidate won or why retry is needed")
 
 

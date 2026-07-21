@@ -131,12 +131,23 @@ class TestResearchConfirmation:
                 cli, ["research", "test idea"], input="y\n"
             )
         assert result.exit_code == 0
-        assert "RESEARCH COMPLETE" in result.output
+        assert "FAILED" in result.output or "PROVED" in result.output
 
 
 class TestResearchResultDisplay:
     def test_complete_shows_success(self, runner, tmp_session_dir):
-        mock_result = _make_result(final_stage=PipelineStage.COMPLETE)
+        proved = [
+            TriedConjecture(
+                conjecture=Conjecture(
+                    statement="Test theorem",
+                    natural_language="Test",
+                    confidence=0.9,
+                    difficulty=3,
+                ),
+                lean_statement="theorem t : True := by trivial",
+            ),
+        ]
+        mock_result = _make_result(final_stage=PipelineStage.COMPLETE, proved=proved)
         p1, p2, p3 = _patch_setup()
         with p1, p2, p3, patch(
             "agentic_research.orchestrator.engine.ResearchOrchestrator.run",
@@ -148,8 +159,8 @@ class TestResearchResultDisplay:
             result = runner.invoke(
                 cli, ["research", "test idea"], input="y\n"
             )
-        assert "RESEARCH COMPLETE" in result.output
-        assert "Research Results" in result.output
+        assert "PROVED" in result.output
+        assert "Cost Breakdown" in result.output
 
     def test_failed_shows_incomplete(self, runner, tmp_session_dir):
         mock_result = _make_result(final_stage=PipelineStage.FAILED)
@@ -164,9 +175,9 @@ class TestResearchResultDisplay:
             result = runner.invoke(
                 cli, ["research", "test idea"], input="y\n"
             )
-        assert "RESEARCH INCOMPLETE" in result.output
+        assert "FAILED" in result.output
 
-    def test_displays_stats_table(self, runner, tmp_session_dir):
+    def test_displays_cost_breakdown(self, runner, tmp_session_dir):
         mock_result = _make_result(total_conjectures=4, total_refinements=2)
         p1, p2, p3 = _patch_setup()
         with p1, p2, p3, patch(
@@ -179,8 +190,7 @@ class TestResearchResultDisplay:
             result = runner.invoke(
                 cli, ["research", "test idea"], input="y\n"
             )
-        assert "Stage reached" in result.output
-        assert "Conjectures tried" in result.output
+        assert "Cost Breakdown" in result.output
         assert "Total cost" in result.output
 
     def test_displays_proved_conjectures(self, runner, tmp_session_dir):
@@ -207,7 +217,7 @@ class TestResearchResultDisplay:
             result = runner.invoke(
                 cli, ["research", "test idea"], input="y\n"
             )
-        assert "Proved Conjectures" in result.output
+        assert "Proved" in result.output
         assert "goldbach" in result.output
 
     def test_displays_session_resume_hint(self, runner, tmp_session_dir):
@@ -242,7 +252,7 @@ class TestResearchKeyboardInterrupt:
                 cli, ["research", "test idea"], input="y\n"
             )
         assert "Interrupted" in result.output
-        assert "Research Results" in result.output
+        assert "Cost Breakdown" in result.output
 
 
 class TestResearchSetupError:

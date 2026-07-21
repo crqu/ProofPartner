@@ -24,6 +24,7 @@ from agentic_research.agents.llm_client import LLMClient
 from agentic_research.logging import get_logger
 from agentic_research.memory.session import ResearchSessionMemory
 from agentic_research.models.agents import AgentContext, AgentStatus, TokenUsage
+from agentic_research.models.interaction import InteractionRequest, InteractionResponse
 from agentic_research.models.research import ConjectureSet, ExplorationResult
 from agentic_research.models.session import (
     ConjectureOutcome,
@@ -59,6 +60,7 @@ class ResearchOrchestrator:
         config: OrchestratorConfig | None = None,
         session_id: str | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
+        interaction_callback: Callable[[InteractionRequest], InteractionResponse] | None = None,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -66,6 +68,7 @@ class ResearchOrchestrator:
         self._config = config or OrchestratorConfig()
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._progress_callback = progress_callback
+        self._interaction_callback = interaction_callback
 
         self._state_machine = PipelineStateMachine()
         self._memory = ResearchSessionMemory(self._session_id)
@@ -330,6 +333,7 @@ class ResearchOrchestrator:
         pipeline = FormalizationPipeline(
             llm_client=self._llm, lean_repl=self._repl, lean_search=self._search,
             progress_callback=self._progress_callback,
+            interaction_callback=self._interaction_callback,
         )
         result = pipeline.run(conj.natural_language)
 

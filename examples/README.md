@@ -9,7 +9,7 @@ Each demo is a self-contained directory with the captured terminal output, any g
 | # | Demo | Pipeline | Description |
 |---|------|----------|-------------|
 | 1 | [Putnam 2024 A1](01-putnam-proof/) | explore → formalize → prove | Full pipeline on a [PutnamBench](https://github.com/trishullab/PutnamBench) competition problem: determine all positive integers *n* with 2*a*^*n* + 3*b*^*n* = 4*c*^*n* |
-| 2 | [Fibonacci & geometric probability](02-exploration-flow/) | explore | Exploration of the 2025 pick-up sticks discovery connecting Fibonacci numbers to the probability of forming geometric shapes with random parameters ([Scientific American top-10 math discovery, 2025](https://www.scientificamerican.com/)) |
+| 2 | [Fibonacci & geometric probability](02-exploration-flow/) | explore | Exploration of the 2025 pick-up sticks discovery connecting Fibonacci numbers to the probability of forming geometric shapes with random parameters ([Scientific American, 2025](https://www.scientificamerican.com/article/students-find-hidden-fibonacci-sequence-in-classic-probability-puzzle/)) |
 
 ## How to read these
 
@@ -22,7 +22,7 @@ Each demo directory contains:
 
 ## Version
 
-Outputs were generated with ProofPartner v0.1.0, `claude-opus-4-6`, Lean 4 v4.x.0, Mathlib commit xxxxx.
+Outputs were generated with ProofPartner v0.1.0, `claude-opus-4-6`, Lean 4 v4.33.0-rc1, Mathlib commit 27d317e.
 
 ## Non-determinism disclaimer
 

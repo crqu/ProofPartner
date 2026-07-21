@@ -7,6 +7,8 @@
    Date: 2026-07-21
    Model: claude-opus-4-6
    Pipeline: explore → formalize → prove
+   Lean toolchain: leanprover/lean4:v4.33.0-rc1
+   Mathlib commit: 27d317e991a3d34e0a2c77d4ea169eacf7d33121
    Total cost: $3.86
    Result: PROOF FAILED — recursive prover stuck on set equality goal
 

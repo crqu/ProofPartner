@@ -29,16 +29,12 @@ The Explorer agent analyzes the problem statement, identifies the number theory 
 
 ### Stage 2: Formalization
 
-The Formalizer agent translates the top conjecture into a Lean 4 statement using type-first formalization. The IntentJudge then verifies that the formal statement faithfully captures the original mathematical intent.
+The Formalizer agent attempts to translate the top conjecture into a Lean 4 statement using type-first formalization. If compilation succeeds, the IntentJudge verifies that the formal statement faithfully captures the original mathematical intent.
 
 **What to look for in the output:**
-- The Lean 4 statement using set-builder notation, matching the PutnamBench format:
-  ```lean
-  theorem putnam_2024_a1 :
-    {n : ℕ | 0 < n ∧ ∃ (a b c : ℕ), 0 < a ∧ 0 < b ∧ 0 < c ∧ 2*a^n + 3*b^n = 4*c^n}
-      = {1}
-  ```
-- Intent verdict: `CORRECT` — confirming the formalization matches the problem
+- Type planning: the type planner identifies Lean types needed (ℕ, set-builder notation), with a JSON parse fallback and retry
+- Lean REPL compilation attempts: the theorem formalizer tries 5 iterations, encountering timeouts (2×), a corrupted Lake package error, a missing Mathlib import, and a syntax error
+- `Formalization failed: Failed to compile theorem after 5 iterations` — the formalizer could not produce a compiling Lean 4 statement, so intent verification was never reached
 
 ### Stage 3: Proof Search
 

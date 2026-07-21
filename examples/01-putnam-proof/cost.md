@@ -6,9 +6,9 @@ Model: `claude-opus-4-6` via Vertex AI
 |-------|-------------|---------------|------------|
 | Exploration (LeanSearch + LLM) | 437 | 2,386 | ~$0.19 |
 | Conjecture Generation (2 LLM calls) | 2,556 | 4,282 | ~$0.35 |
-| Formalization (type planning + theorem formalization, 5 iterations) | 4,750 | 2,287 | ~$0.38 |
-| Proof Search (automated tactics + lemma decomposition + recursive prover) | ~4,200 | ~29,170 | ~$2.94 |
-| **Total** | **~11,943** | **~38,125** | **$3.86** |
+| Formalization (type planning + theorem formalization, 5 iterations, 8 LLM calls) | 7,825 | 3,504 | ~$0.38 |
+| Proof Search (automated tactics + lemma decomposition + recursive prover, 48 LLM calls) | 50,527 | 30,215 | ~$2.94 |
+| **Total** | **~61,345** | **~40,387** | **$3.86** |
 
 ## Pipeline Result
 

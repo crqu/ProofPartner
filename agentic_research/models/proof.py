@@ -211,3 +211,5 @@ class ProofPipelineResult(BaseModel):
     failure_reason: str | None = None
     backtrack_stages: list[str] = Field(default_factory=list)
     total_token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    backend: str | None = Field(default=None, description="Lean backend used (mock/subprocess/lean_dojo)")
+    verified: bool = Field(default=True, description="False if proof was run in mock mode")

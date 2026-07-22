@@ -29,12 +29,14 @@ The Explorer agent analyzes the problem statement, identifies the number theory 
 
 ### Stage 2: Formalization
 
-The Formalizer agent attempts to translate the top conjecture into a Lean 4 statement using type-first formalization. If compilation succeeds, the IntentJudge verifies that the formal statement faithfully captures the original mathematical intent.
+The Formalizer agent translates the top conjecture into a Lean 4 statement using type-first formalization. The statement compiles on the first iteration, and the IntentJudge verifies it faithfully captures the original mathematical intent.
 
 **What to look for in the output:**
 - Type planning: the type planner identifies Lean types needed (ℕ, set-builder notation), with a JSON parse fallback and retry
-- Lean REPL compilation attempts: the theorem formalizer tries 5 iterations, encountering timeouts (2×), a corrupted Lake package error, a missing Mathlib import, and a syntax error
-- `Formalization failed: Failed to compile theorem after 5 iterations` — the formalizer could not produce a compiling Lean 4 statement, so intent verification was never reached
+- Lemma planning: 5 helper lemmas planned, covering 1 custom type (`DiophantineExponentSet`)
+- Lean REPL compilation: the theorem formalizer produces a compiling statement on iteration 1 (`theorem_formalizer_done compiles=True iterations=1`), verified against Mathlib with the cache present
+- IntentJudge verdict: `CORRECT` with confidence 1.0 across all dimensions (type fidelity, quantifier accuracy, constraint preservation)
+- `formalization_pipeline_success` — the full type-first pipeline completes end-to-end
 
 ### Stage 3: Proof Search
 
@@ -45,20 +47,27 @@ The Prover agent searches for a proof, which requires two parts:
 
 **What to look for in the output:**
 - Budget confirmation prompt (proof search is the most expensive stage)
-- Progress updates with running cost
-- The prover's decomposition into lemmas (n=1 existence, n=2 mod-4 descent, n≥3 impossibility)
-- `PROOF FAILED` status — the recursive prover got stuck on the set equality goal
+- Automated tactic attempts (tier1_combinator, aesop) failing before LLM-guided search
+- Three proof strategies tried (direct, case_analysis, contradiction) — all fail on the monolithic goal
+- Lemma decomposition: the pipeline breaks the theorem into 5 top-level lemmas
+- Lemma leanification: all 5 lemmas successfully translated to compiling Lean 4 statements
+- Recursive prover: `lemma_1` (n=1 witness) proved directly; `lemma_2`–`lemma_3` sub-lemmas (parity arguments) proved via further decomposition
+- `lemma_4` (n≥2 impossibility) triggers deep recursive decomposition to tree depth 4, proving many leaf lemmas but getting stuck on the core descent step (`lemma_4_lemma_2`)
+- 367 LLM calls over 72 minutes, $60.10 total cost — budget exceeded
+- `PROOF FAILED` status — the recursive prover could not close all nodes
 
 ### Outcome: Partial Success
 
-In this run, **exploration succeeded** (correctly identifying the answer as {1} with high confidence) but **proof search failed**. This is an honest result — Putnam competition problems are at the frontier of what automated provers can handle. The pipeline correctly:
+In this run, **exploration succeeded** (correctly identifying the answer as {1} with high confidence), **formalization succeeded** (producing a compiling Lean 4 statement with IntentJudge verdict CORRECT at confidence 1.0), but **proof search failed**. This is an honest result — Putnam competition problems are at the frontier of what automated provers can handle. The pipeline correctly:
 
 - Identified the problem domain (Number Theory / Diophantine Equations)
-- Generated the correct answer ({1}) as conjecture #5
-- Decomposed the proof into the right lemmas
-- But could not formalize individual lemmas into compiling Lean 4 code
+- Generated the correct answer ({1}) as the top conjecture
+- Formalized the statement into compiling Lean 4 on the first attempt
+- Verified the formalization faithfully captures the mathematical intent
+- Decomposed the proof into the right lemmas and proved many sub-goals
+- But could not close the n≥2 impossibility argument via infinite descent
 
-This demonstrates both ProofPartner's strengths (exploration, conjecture generation) and current limitations (formal proof of competition-level problems).
+This demonstrates ProofPartner's strengths (exploration, conjecture generation, formalization with intent verification, lemma decomposition) and current limitations (formal proof of competition-level number theory via descent arguments).
 
 ### Mathematical approach
 
@@ -68,6 +77,6 @@ The key insight is that for *n* = 1, the linear Diophantine equation 2*a* + 3*b*
 
 | File | Contents |
 |------|----------|
-| [output.txt](output.txt) | Captured terminal output from the full pipeline run |
+| [output.txt](output.txt) | Captured terminal output from the full pipeline run (trimmed — proof search section summarized) |
 | [theorem.lean](theorem.lean) | Generated Lean 4 artifact with metadata comments |
 | [cost.md](cost.md) | Per-stage cost breakdown with token counts |

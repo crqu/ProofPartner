@@ -158,10 +158,16 @@ class _MockBackend:
 
 class _SubprocessBackend:
     _LAKE_PROJECT_DIR = Path(__file__).parent.parent.parent / "proofpartner-lean"
+    _MATHLIB_OLEANS_DIR = (
+        _LAKE_PROJECT_DIR / ".lake" / "packages" / "mathlib"
+        / ".lake" / "build" / "lib" / "lean" / "Mathlib"
+    )
+    _CACHE_DOWNLOAD_TIMEOUT = 600
 
     def __init__(self, config: ReplConfig) -> None:
         self._config = config
         self._lake_available: bool | None = None
+        self._mathlib_cache_checked: bool = False
 
     def has_lake_project(self) -> bool:
         if self._lake_available is None:
@@ -178,7 +184,49 @@ class _SubprocessBackend:
             )
         return self._lake_available
 
+    def _ensure_mathlib_cache(self) -> None:
+        if self._mathlib_cache_checked:
+            return
+        self._mathlib_cache_checked = True
+
+        if self._MATHLIB_OLEANS_DIR.is_dir():
+            log.info(
+                "mathlib_cache_present",
+                path=str(self._MATHLIB_OLEANS_DIR),
+            )
+            return
+
+        log.info(
+            "mathlib_cache_missing",
+            path=str(self._MATHLIB_OLEANS_DIR),
+        )
+        try:
+            proc = subprocess.run(
+                ["lake", "exe", "cache", "get"],
+                capture_output=True,
+                text=True,
+                timeout=self._CACHE_DOWNLOAD_TIMEOUT,
+                cwd=str(self._LAKE_PROJECT_DIR),
+            )
+            if proc.returncode == 0:
+                log.info("mathlib_cache_downloaded")
+            else:
+                log.warning(
+                    "mathlib_cache_download_failed",
+                    returncode=proc.returncode,
+                    stderr=proc.stderr[:500] if proc.stderr else "",
+                )
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "mathlib_cache_download_timeout",
+                timeout_seconds=self._CACHE_DOWNLOAD_TIMEOUT,
+            )
+        except OSError as exc:
+            log.warning("mathlib_cache_download_error", error=str(exc))
+
     def _compile_with_lake(self, code: str, timeout: int) -> CompilationResult:
+        if "Mathlib" in code:
+            self._ensure_mathlib_cache()
         lean_dir = self._LAKE_PROJECT_DIR / "ProofPartner"
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".lean", dir=str(lean_dir), delete=False

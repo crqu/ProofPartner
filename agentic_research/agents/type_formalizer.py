@@ -63,6 +63,7 @@ class TypeFormalizer(BaseAgent):
         max_leanify_iterations: int = 5,
         prover_config: ProverConfig | None = None,
         intent_judge: object | None = None,
+        iteration_context: str | None = None,
     ) -> None:
         super().__init__(name="type_formalizer", max_retries=1)
         self._llm = llm_client
@@ -71,6 +72,7 @@ class TypeFormalizer(BaseAgent):
         self._max_leanify_iterations = max_leanify_iterations
         self._prover_config = prover_config or ProverConfig(max_iterations=3)
         self._intent_judge = intent_judge
+        self._iteration_context = iteration_context
 
     def _execute(self, context: AgentContext) -> AgentResult:
         type_candidate = TypeCandidate.model_validate(
@@ -150,6 +152,12 @@ class TypeFormalizer(BaseAgent):
                     lean_signature=candidate.lean_signature or "not specified",
                     dependencies=prior_definitions or "none",
                 )
+                if self._iteration_context:
+                    user_content += (
+                        "\n\n## Feedback from Previous Iteration\n"
+                        f"{self._iteration_context}\n\n"
+                        "Revise the type definition to address these auxiliary lemma failures."
+                    )
             else:
                 user_content = TYPE_LEANIFIER_FEEDBACK_TEMPLATE.format(
                     type_name=candidate.name,

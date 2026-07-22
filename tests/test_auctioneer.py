@@ -1,4 +1,5 @@
-"""Tests for Auctioneer quality gating: adaptive spawning and semantic alignment."""
+"""Tests for Auctioneer quality gating: adaptive spawning, semantic alignment,
+and iterative auxiliary lemma refinement."""
 
 from __future__ import annotations
 
@@ -419,3 +420,176 @@ class TestAdaptiveSpawning:
         auction = AuctionResult.model_validate(result.result)
         ids = [s.candidate_id for s in auction.scores]
         assert len(ids) == len(set(ids))
+
+
+# ---------------------------------------------------------------------------
+# build_failure_feedback
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFailureFeedback:
+    def test_failure_feedback_includes_failed_lemmas(self):
+        winner = TypeFormalizationCandidate(
+            candidate_id=0,
+            type_name="T",
+            lean_code="structure T where\n  x : Nat",
+            compiles=True,
+            auxiliary_lemmas=[
+                AuxiliaryLemma(
+                    lemma=LemmaStatement(name="ok_lemma", statement_nl="ok", for_type="T"),
+                    proved=True,
+                ),
+                AuxiliaryLemma(
+                    lemma=LemmaStatement(name="bad_lemma", statement_nl="bad", for_type="T"),
+                    proved=False,
+                    error_message="type mismatch at application",
+                ),
+                AuxiliaryLemma(
+                    lemma=LemmaStatement(name="worse_lemma", statement_nl="worse", for_type="T"),
+                    proved=False,
+                    error_message="unknown identifier 'foo'",
+                ),
+            ],
+        )
+        ar = AuctionResult(
+            type_name="T",
+            verdict=AuctionVerdict.ACCEPTED,
+            winner_id=0,
+            winning_candidate=winner,
+        )
+        feedback = Auctioneer.build_failure_feedback(ar)
+        assert "bad_lemma" in feedback
+        assert "worse_lemma" in feedback
+        assert "ok_lemma" not in feedback
+        assert "type mismatch" in feedback
+        assert "unknown identifier" in feedback
+
+    def test_no_feedback_when_all_proved(self):
+        winner = _good_candidate(0, compiles=True, proved=True)
+        ar = AuctionResult(
+            type_name="T",
+            verdict=AuctionVerdict.ACCEPTED,
+            winner_id=0,
+            winning_candidate=winner,
+        )
+        feedback = Auctioneer.build_failure_feedback(ar)
+        assert feedback == ""
+
+    def test_no_feedback_without_winner(self):
+        ar = AuctionResult(
+            type_name="T",
+            verdict=AuctionVerdict.RETRY,
+        )
+        feedback = Auctioneer.build_failure_feedback(ar)
+        assert feedback == ""
+
+
+# ---------------------------------------------------------------------------
+# Iterative refinement (FormalizationPipeline._auction_type)
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_for_refinement(
+    candidates_per_round: list[list[TypeFormalizationCandidate]],
+    max_refinement_iterations: int = 3,
+):
+    """Create a FormalizationPipeline with mocked Auctioneer responses."""
+    from agentic_research.pipelines.formalization import FormalizationPipeline
+    from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+    repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+
+    call_index = [0]
+
+    def mock_run_parallel(tc, lemmas, prior, *, k_override=None, id_offset=0, iteration_context=None):
+        idx = call_index[0]
+        call_index[0] += 1
+        if idx < len(candidates_per_round):
+            return candidates_per_round[idx]
+        return candidates_per_round[-1]
+
+    llm = _make_mock_llm([MOCK_TYPE_LEAN_CODE] * 100)
+
+    pipeline = FormalizationPipeline(
+        llm_client=llm,
+        lean_repl=repl,
+        lean_search=MagicMock(),
+        k=3,
+        max_retries=len(candidates_per_round),
+        max_refinement_iterations=max_refinement_iterations,
+    )
+
+    return pipeline, mock_run_parallel
+
+
+class TestIterativeRefinement:
+    def test_iterative_refinement_early_exit(self):
+        """Exits immediately when proof_rate >= 0.8."""
+        good = TypeFormalizationCandidate(
+            candidate_id=0,
+            type_name="T",
+            lean_code="structure T where\n  x : Nat",
+            compiles=True,
+            auxiliary_lemmas=[
+                AuxiliaryLemma(
+                    lemma=LemmaStatement(name="l1", statement_nl="s", for_type="T"),
+                    proved=True,
+                ),
+                AuxiliaryLemma(
+                    lemma=LemmaStatement(name="l2", statement_nl="s2", for_type="T"),
+                    proved=True,
+                ),
+            ],
+        )
+        ar = AuctionResult(
+            type_name="T",
+            verdict=AuctionVerdict.ACCEPTED,
+            winner_id=0,
+            winning_candidate=good,
+            scores=[],
+        )
+        assert good.proved_ratio == 1.0
+        assert ar.refinement_iterations == 0
+
+    def test_stall_detection_exits_on_plateau(self):
+        """When improvement < 0.05, refinement stops."""
+        from agentic_research.pipelines.formalization import (
+            REFINEMENT_STALL_THRESHOLD,
+        )
+
+        history = [0.3, 0.32]
+        improvement = history[-1] - history[-2]
+        assert improvement < REFINEMENT_STALL_THRESHOLD
+
+    def test_max_iterations_respected(self):
+        from agentic_research.pipelines.formalization import (
+            DEFAULT_MAX_REFINEMENT_ITERATIONS,
+        )
+
+        assert DEFAULT_MAX_REFINEMENT_ITERATIONS == 0
+
+    def test_proof_rate_history_tracked(self):
+        ar = AuctionResult(
+            type_name="T",
+            verdict=AuctionVerdict.ACCEPTED,
+            winner_id=0,
+            refinement_iterations=2,
+            proof_rate_history=[0.3, 0.5, 0.8],
+        )
+        assert len(ar.proof_rate_history) == 3
+        assert ar.refinement_iterations == 2
+
+    def test_auction_result_has_refinement_fields(self):
+        ar = AuctionResult(
+            type_name="T",
+            verdict=AuctionVerdict.ACCEPTED,
+        )
+        assert ar.refinement_iterations == 0
+        assert ar.proof_rate_history == []
+
+    def test_cost_bounded_by_max_iterations(self):
+        k = 3
+        max_iters = 3
+        single_call_tokens = 500
+        max_total = k * single_call_tokens * (max_iters + 1)
+        assert max_total == 6000

@@ -504,8 +504,9 @@ def check_cmd(ctx: click.Context, lean_statement: str, budget: float, allow_mock
 @click.option("--use-detailer/--no-detailer", default=True, help="Enable ProofDetailer for proof sketch enrichment (default: enabled)")
 @click.option("--allow-mock", is_flag=True, default=False, help="Allow mock Lean backend for testing (results NOT verified)")
 @click.option("--interactive", is_flag=True, default=False, help="Pause at decision points for user input")
+@click.option("--decomposition-k", type=int, default=3, help="Number of parallel decomposition candidates (default: 3)")
 @click.pass_context
-def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool, allow_mock: bool, interactive: bool) -> None:
+def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: int, backend: str, use_critic: bool, use_detailer: bool, allow_mock: bool, interactive: bool, decomposition_k: int) -> None:
     """Attempt to prove a Lean 4 statement.
 
     Runs ProofPipeline with confirmation prompt before starting.
@@ -584,6 +585,7 @@ def prove_cmd(ctx: click.Context, lean_statement: str, budget: float, timeout: i
             external_prover_config=external_config,
             use_proof_critic=use_critic,
             use_proof_detailer=use_detailer,
+            decomposition_k=decomposition_k,
             progress_callback=on_prove_progress,
         )
         result = pipeline.run(lean_statement=lean_statement, statement_nl=lean_statement)

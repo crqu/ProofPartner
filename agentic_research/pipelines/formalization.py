@@ -47,6 +47,9 @@ log = get_logger(__name__)
 
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_K = 3
+DEFAULT_MAX_REFINEMENT_ITERATIONS = 0
+REFINEMENT_PROOF_RATE_THRESHOLD = 0.8
+REFINEMENT_STALL_THRESHOLD = 0.05
 
 
 class FormalizationPipeline:
@@ -67,6 +70,7 @@ class FormalizationPipeline:
         use_intent_judge: bool = False,
         formalization_cache: FormalizationCache | None = None,
         lean_toolchain: str = "",
+        max_refinement_iterations: int = DEFAULT_MAX_REFINEMENT_ITERATIONS,
     ) -> None:
         self._llm = llm_client
         self._repl = lean_repl
@@ -80,6 +84,7 @@ class FormalizationPipeline:
         self._use_intent_judge = use_intent_judge
         self._cache = formalization_cache
         self._lean_toolchain = lean_toolchain
+        self._max_refinement_iterations = max_refinement_iterations
         self._total_tokens = TokenUsage()
         self._conjecture_nl: str = ""
 
@@ -417,6 +422,8 @@ class FormalizationPipeline:
         prior_definitions: str,
     ) -> AuctionResult:
         intent_judge = self._make_intent_judge() if self._use_intent_judge else None
+        iteration_context: str | None = None
+        proof_rate_history: list[float] = []
 
         for attempt in range(1, self._max_retries + 1):
             auctioneer = Auctioneer(
@@ -435,6 +442,7 @@ class FormalizationPipeline:
                     "type_candidate": candidate.model_dump(),
                     "lemmas": [lem.model_dump() for lem in lemmas],
                     "prior_definitions": prior_definitions,
+                    **({"iteration_context": iteration_context} if iteration_context else {}),
                 },
             )
 
@@ -444,8 +452,52 @@ class FormalizationPipeline:
                 continue
 
             auction_result = AuctionResult.model_validate(result.result)
+
             if auction_result.verdict == AuctionVerdict.ACCEPTED:
-                return auction_result
+                current_rate = (
+                    auction_result.winning_candidate.proved_ratio
+                    if auction_result.winning_candidate
+                    else 0.0
+                )
+                proof_rate_history.append(current_rate)
+
+                if current_rate >= REFINEMENT_PROOF_RATE_THRESHOLD:
+                    auction_result.refinement_iterations = len(proof_rate_history) - 1
+                    auction_result.proof_rate_history = proof_rate_history
+                    return auction_result
+
+                if (
+                    len(proof_rate_history) >= 2
+                    and (proof_rate_history[-1] - proof_rate_history[-2]) < REFINEMENT_STALL_THRESHOLD
+                ):
+                    log.info(
+                        "refinement_stall_detected",
+                        type_name=candidate.name,
+                        proof_rate_history=proof_rate_history,
+                    )
+                    auction_result.refinement_iterations = len(proof_rate_history) - 1
+                    auction_result.proof_rate_history = proof_rate_history
+                    return auction_result
+
+                if len(proof_rate_history) > self._max_refinement_iterations:
+                    auction_result.refinement_iterations = len(proof_rate_history) - 1
+                    auction_result.proof_rate_history = proof_rate_history
+                    return auction_result
+
+                feedback = Auctioneer.build_failure_feedback(auction_result)
+                if not feedback:
+                    auction_result.refinement_iterations = len(proof_rate_history) - 1
+                    auction_result.proof_rate_history = proof_rate_history
+                    return auction_result
+
+                iteration_context = feedback
+                log.info(
+                    "refinement_iteration",
+                    type_name=candidate.name,
+                    iteration=len(proof_rate_history),
+                    proof_rate=current_rate,
+                )
+                continue
 
             log.info(
                 "formalization_auction_retry",
@@ -454,11 +506,14 @@ class FormalizationPipeline:
                 reason=auction_result.reason,
             )
 
-        return AuctionResult(
+        final_result = AuctionResult(
             type_name=candidate.name,
             verdict=AuctionVerdict.RETRY,
             reason=f"All {self._max_retries} retry attempts exhausted",
+            refinement_iterations=len(proof_rate_history),
+            proof_rate_history=proof_rate_history,
         )
+        return final_result
 
     def _run_theorem_formalizer(
         self, conjecture_nl: str, type_definitions: str

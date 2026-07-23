@@ -67,6 +67,7 @@ class RecursiveProver(BaseAgent):
 
     _MAX_TOTAL_NODES = 50
     _COMPLEXITY_DECOMPOSE_THRESHOLD = 0.7
+    _PREAMBLE_KEYWORDS = frozenset(["import", "open", "set_option"])
 
     def __init__(
         self,
@@ -269,10 +270,18 @@ class RecursiveProver(BaseAgent):
             )
 
             if not parent_proved:
+                if attempt_errors and attempt_errors == previous_errors:
+                    log.warning(
+                        "recursive_prover_identical_errors",
+                        node_id=node.node_id,
+                        retry=retry + 1,
+                    )
+                    break
+
                 previous_proof = attempt_code
                 previous_errors = attempt_errors
 
-                diagnosis = self._diagnose_failure(tree, node, tokens)
+                diagnosis = self._diagnose_failure(tree, node, tokens, errors_hint=attempt_errors)
                 node.failure_diagnosis = diagnosis
 
                 if diagnosis and diagnosis.failure_type in (
@@ -320,8 +329,8 @@ class RecursiveProver(BaseAgent):
         node.status = NodeStatus.FAILED
         return False
 
-    @staticmethod
-    def _format_child_declaration(child: ProofNode) -> str:
+    @classmethod
+    def _format_child_declaration(cls, child: ProofNode) -> str:
         """Format a child node as an axiom declaration with usage hint.
 
         All children are declared as axioms (not theorems with sorry) so the
@@ -329,6 +338,26 @@ class RecursiveProver(BaseAgent):
         """
         stmt = child.statement_lean.strip()
         name = child.node_id.replace("-", "_")
+
+        lines = stmt.split("\n")
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            first_word = stripped.split()[0] if stripped.split() else ""
+            if first_word in cls._PREAMBLE_KEYWORDS:
+                continue
+            cleaned.append(line)
+        stmt = "\n".join(cleaned).strip()
+
+        if not stmt:
+            log.warning(
+                "format_child_empty_after_strip",
+                node_id=child.node_id,
+                original_len=len(child.statement_lean),
+            )
+
         if stmt.startswith("axiom "):
             pass
         elif stmt.startswith("theorem ") or stmt.startswith("lemma "):
@@ -338,6 +367,69 @@ class RecursiveProver(BaseAgent):
         else:
             stmt = f"axiom {name} : {stmt}"
         return f"{stmt}\n-- Use: have <result> := {name} <args>"
+
+    _PATCH_ASSEMBLY_MAX_ITERATIONS = 3
+
+    def _patch_assembly(
+        self, child_decls: str, tree: LemmaTree, node: ProofNode
+    ) -> str:
+        """Hilbert-style post-assembly correction loop.
+
+        Pre-compiles child_decls to check syntax validity. On failure,
+        applies targeted string repairs (re-strip preamble, fix brackets).
+        Returns corrected child_decls or original if unfixable.
+        """
+        sentinel = child_decls + "\n-- sentinel"
+        compilation = self._repl.execute(sentinel)
+        if compilation.compilation_status == CompilationStatus.OK:
+            return child_decls
+
+        last_error = "\n".join(compilation.errors or [])
+        for iteration in range(self._PATCH_ASSEMBLY_MAX_ITERATIONS):
+            patched_lines = []
+            for line in child_decls.split("\n"):
+                stripped = line.strip()
+                if not stripped:
+                    patched_lines.append(line)
+                    continue
+                first_word = stripped.split()[0] if stripped.split() else ""
+                if first_word in self._PREAMBLE_KEYWORDS:
+                    continue
+                patched_lines.append(line)
+            child_decls = "\n".join(patched_lines).strip()
+
+            open_parens = child_decls.count("(") - child_decls.count(")")
+            if open_parens > 0:
+                child_decls += ")" * open_parens
+            open_brackets = child_decls.count("[") - child_decls.count("]")
+            if open_brackets > 0:
+                child_decls += "]" * open_brackets
+            open_braces = child_decls.count("{") - child_decls.count("}")
+            if open_braces > 0:
+                child_decls += "}" * open_braces
+
+            child_decls = re.sub(
+                r"\b(axiom|theorem|lemma)\s+\1\b", r"\1", child_decls
+            )
+
+            sentinel = child_decls + "\n-- sentinel"
+            compilation = self._repl.execute(sentinel)
+            if compilation.compilation_status == CompilationStatus.OK:
+                log.info(
+                    "patch_assembly_fixed",
+                    node_id=node.node_id,
+                    iteration=iteration + 1,
+                )
+                return child_decls
+            last_error = "\n".join(compilation.errors or [])
+
+        log.warning(
+            "patch_assembly_exhausted",
+            node_id=node.node_id,
+            iteration_count=self._PATCH_ASSEMBLY_MAX_ITERATIONS,
+            last_error=last_error,
+        )
+        return child_decls
 
     def _prove_parent_with_children(
         self,
@@ -360,6 +452,10 @@ class RecursiveProver(BaseAgent):
 
         if not child_decls:
             return False, "", ""
+
+        child_decls = self._patch_assembly(child_decls, tree, node)
+        if not child_decls:
+            return False, "", "assembly_unfixable"
 
         user_content = PARENT_PROOF_USER_TEMPLATE.format(
             parent_statement=node.statement_lean,
@@ -398,10 +494,35 @@ class RecursiveProver(BaseAgent):
 
         return False, proof_code, errors_str
 
+    _ASSEMBLY_ERROR_PATTERNS = [
+        ("unexpected token", "axiom"),
+        ("unknown identifier 'import'", ""),
+        ("unknown identifier 'open'", ""),
+        ("unknown identifier 'set_option'", ""),
+    ]
+
     def _diagnose_failure(
-        self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage
+        self,
+        tree: LemmaTree,
+        node: ProofNode,
+        tokens: TokenUsage,
+        errors_hint: str = "",
     ) -> FailureDiagnosis:
         """Use LLM to classify why the parent proof failed."""
+        errors_str = errors_hint
+
+        for pattern_a, pattern_b in self._ASSEMBLY_ERROR_PATTERNS:
+            if pattern_a in errors_str and (not pattern_b or pattern_b in errors_str):
+                log.info(
+                    "diagnose_assembly_error_shortcircuit",
+                    node_id=node.node_id,
+                    pattern=pattern_a,
+                )
+                return FailureDiagnosis(
+                    failure_type=FailureType.ASSEMBLY_ERROR,
+                    description=f"Assembly syntax error detected: {pattern_a}",
+                )
+
         children = tree.get_children(node.node_id)
         child_decls = "\n\n".join(
             f"-- {c.node_id}\n{c.statement_lean}" for c in children if c.statement_lean

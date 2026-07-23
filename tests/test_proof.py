@@ -31,6 +31,7 @@ from agentic_research.models.proof import (
     RecursiveProofResult,
     StrategyType,
 )
+from agentic_research.models.tools import CompilationStatus
 
 
 # ---------------------------------------------------------------------------
@@ -814,6 +815,281 @@ class TestFormatChildDeclaration:
         result = RecursiveProver._format_child_declaration(child)
         assert result.startswith("axiom prokhorov_compact")
         assert "axiom lemma_3" not in result
+
+    def test_strip_single_import(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_1",
+            statement_nl="basic truth",
+            statement_lean="import Mathlib\n\ntheorem lemma_1 : True := sorry",
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert result.startswith("axiom lemma_1")
+        assert "import" not in result.split("\n")[0]
+        assert "sorry" not in result
+
+    def test_strip_open_directive(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_2",
+            statement_nl="compactness",
+            statement_lean="import Mathlib\nopen Topology\n\ntheorem lemma_2 (X : Type*) : IsCompact X := sorry",
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert "import" not in result
+        assert "open" not in result.split("\n")[0]
+        assert "(X : Type*)" in result
+
+    def test_strip_set_option(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_3",
+            statement_nl="truth",
+            statement_lean="set_option maxHeartbeats 200000\n\ntheorem lemma_3 : True := sorry",
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert "set_option" not in result
+        assert result.startswith("axiom lemma_3")
+
+    def test_multiline_theorem_with_preamble(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_4",
+            statement_nl="compactness",
+            statement_lean=(
+                "import Mathlib\nopen Topology\n\ntheorem lemma_4\n"
+                "  (X : Type*) [TopologicalSpace X]\n"
+                "  : IsCompact X := sorry"
+            ),
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert "import" not in result
+        assert "open Topology" not in result
+        assert "(X : Type*)" in result
+        assert "[TopologicalSpace X]" in result
+        assert "sorry" not in result
+
+    def test_strip_multiple_imports(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_5",
+            statement_nl="finset",
+            statement_lean=(
+                "import Mathlib.Data.Finset.Basic\n"
+                "import Mathlib.Algebra.BigOperators\n\n"
+                "lemma lemma_5 (s : Finset ℕ) : True := sorry"
+            ),
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert "import" not in result
+        assert result.startswith("axiom lemma_5")
+        assert "(s : Finset ℕ)" in result
+
+    def test_empty_after_strip(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        child = ProofNode(
+            node_id="lemma_6",
+            statement_nl="empty",
+            statement_lean="import Mathlib\nopen Topology",
+        )
+        result = RecursiveProver._format_child_declaration(child)
+        assert "lemma_6" in result
+        assert not result.startswith("axiom lemma_6 : import")
+
+    def test_patch_assembly_noop(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        decls = "axiom child_1 : True\n-- Use: have <result> := child_1 <args>"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := by exact child_1",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+        result = prover._patch_assembly(decls, tree, tree.nodes["root"])
+        assert result == decls
+
+    def test_patch_assembly_strips_residual_imports(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        decls = "import Mathlib\naxiom child_1 : True -- MOCK_ERROR"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := by exact child_1",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+        result = prover._patch_assembly(decls, tree, tree.nodes["root"])
+        assert "import" not in result
+        assert "axiom child_1" in result
+
+    def test_patch_assembly_exhaustion(self):
+        from unittest.mock import patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.tools import CompilationResult, ToolStatus
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        decls = "axiom child_1 : True"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := by exact child_1",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        def always_fail(code):
+            return CompilationResult(
+                status=ToolStatus.SUCCESS,
+                compilation_status=CompilationStatus.ERROR,
+                errors=["some unfixable error"],
+            )
+
+        with patch.object(repl, "execute", side_effect=always_fail):
+            result = prover._patch_assembly(decls, tree, tree.nodes["root"])
+
+        assert result == decls
+
+    def test_assembly_error_failure_type(self):
+        assert FailureType.ASSEMBLY_ERROR == "assembly_error"
+
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+        tokens = TokenUsage()
+        diagnosis = prover._diagnose_failure(
+            tree, tree.nodes["root"], tokens,
+            errors_hint="unexpected token '}'; expected '=>' at axiom declaration",
+        )
+        assert diagnosis.failure_type == FailureType.ASSEMBLY_ERROR
+
+    def test_retry_early_exit_identical_errors(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem main := by exact child_1\n```",
+            '{"failure_type": "stuck_goal", "description": "goal not closed"}',
+            "```lean\ntheorem main := by exact child_1\n```",
+            '{"failure_type": "stuck_goal", "description": "goal not closed"}',
+            "```lean\ntheorem main := by exact child_1\n```",
+            '{"failure_type": "stuck_goal", "description": "goal not closed"}',
+        ])
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+
+        from unittest.mock import patch
+        compile_count = 0
+        original_execute = repl.execute
+
+        def counting_execute(code):
+            nonlocal compile_count
+            compile_count += 1
+            result = original_execute(code)
+            result.compilation_status = CompilationStatus.ERROR
+            result.errors = ["type mismatch\n  expected True\n  got False"]
+            return result
+
+        prover = RecursiveProver(
+            llm_client=llm, lean_repl=repl, max_retries_per_node=5
+        )
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main : True := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+        tokens = TokenUsage()
+
+        with patch.object(repl, "execute", side_effect=counting_execute):
+            result = prover._prove_parent(tree, tree.nodes["root"], tokens)
+
+        assert not result
+        assert tree.nodes["root"].retries_used < 5
 
 
 # ---------------------------------------------------------------------------

@@ -67,7 +67,10 @@ class RecursiveProver(BaseAgent):
 
     _MAX_TOTAL_NODES = 50
     _COMPLEXITY_DECOMPOSE_THRESHOLD = 0.7
-    _PREAMBLE_KEYWORDS = frozenset(["import", "open", "set_option"])
+    _PREAMBLE_KEYWORDS = frozenset([
+        "import", "open", "set_option", "noncomputable", "section",
+        "namespace", "variable", "universe", "abbrev",
+    ])
 
     def __init__(
         self,
@@ -268,13 +271,29 @@ class RecursiveProver(BaseAgent):
 
         root_name = node.node_id.replace("-", "_")
         root_stmt = node.statement_lean.strip()
-        root_sig = re.sub(r"^(?:theorem|lemma|def)\s+\S+", "", root_stmt)
-        root_sig = re.sub(r"\s*:=\s*(?:by\s+)?sorry\s*$", "", root_sig)
+
+        # Strip preamble lines (import, open, noncomputable abbrev, etc.)
+        # from root statement — it may include the full lean_statement with
+        # imports that would duplicate the preamble we prepend below.
+        stripped_lines = []
+        preamble_lines = []
+        for line in root_stmt.split("\n"):
+            first_word = line.strip().split()[0] if line.strip().split() else ""
+            if first_word in self._PREAMBLE_KEYWORDS:
+                preamble_lines.append(line)
+            elif line.strip():
+                stripped_lines.append(line)
+        root_stmt_clean = "\n".join(stripped_lines).strip()
+
+        root_sig = re.sub(r"^(?:theorem|lemma|def)\s+\S+", "", root_stmt_clean)
+        root_sig = re.sub(r"\s*:=.*$", "", root_sig, flags=re.DOTALL)
         root_decl = f"def {root_name}_skeleton{root_sig} := sorry"
 
+        # Use preamble from root statement if no explicit lean_preamble set
+        effective_preamble = self._lean_preamble or "\n".join(preamble_lines)
         skeleton = child_decls + "\n\n" + root_decl
-        if self._lean_preamble:
-            skeleton = self._lean_preamble + "\n\n" + skeleton
+        if effective_preamble.strip():
+            skeleton = effective_preamble.strip() + "\n\n" + skeleton
 
         compilation = self._repl.execute(skeleton)
         if compilation.compilation_status == CompilationStatus.OK:
@@ -404,15 +423,27 @@ class RecursiveProver(BaseAgent):
                 original_len=len(child.statement_lean),
             )
 
+        # Extract the target declaration from multi-declaration code.
+        # The LLM may include helper defs before the main theorem.
+        # Find the last theorem/lemma/axiom/def declaration to use.
+        decl_pattern = re.compile(
+            r"^(theorem|lemma|axiom|def)\s+", re.MULTILINE
+        )
+        matches = list(decl_pattern.finditer(stmt))
+        if len(matches) > 1:
+            last_match = matches[-1]
+            stmt = stmt[last_match.start():].strip()
+
         if stmt.startswith("def "):
             if ":= sorry" not in stmt:
-                stmt = re.sub(r"\s*:=.*$", " := sorry", stmt)
+                stmt = re.sub(r"\s*:=.*$", " := sorry", stmt, flags=re.DOTALL)
         elif stmt.startswith("axiom "):
             sig = re.sub(r"^axiom\s+\S+", "", stmt)
             stmt = f"def {name}{sig} := sorry"
         elif stmt.startswith("theorem ") or stmt.startswith("lemma "):
             sig = re.sub(r"^(?:theorem|lemma)\s+\S+", "", stmt)
-            sig = re.sub(r"\s*:=\s*(?:by\s+)?sorry\s*$", "", sig)
+            # Strip any proof body (:= sorry, := by sorry, := by <tactic>, etc.)
+            sig = re.sub(r"\s*:=.*$", "", sig, flags=re.DOTALL)
             stmt = f"def {name}{sig} := sorry"
         else:
             stmt = f"def {name} : {stmt} := sorry"

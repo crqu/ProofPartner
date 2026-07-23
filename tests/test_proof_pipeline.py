@@ -620,6 +620,134 @@ class TestLemmaLeanifierPreamble:
         assert "Available Definitions" not in prompt_content
 
 
+class TestLemmaLeanifierRetryTemperature:
+    """Verify LemmaLeanifier escalates temperature on retries."""
+
+    @staticmethod
+    def _make_leanifier_tree():
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        return LemmaTree(
+            root_id="root",
+            topological_order=["sub-1", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root theorem",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["sub-1"],
+                ),
+                "sub-1": ProofNode(
+                    node_id="sub-1",
+                    statement_nl="sublemma about coupling",
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+
+    def test_initial_attempt_uses_temperature_zero(self):
+        """First leanification attempt uses temperature=0.0, use_cache=True."""
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+
+        lean_response = "```lean\ntheorem sub_1 : True := sorry\n```"
+        llm = _make_mock_llm([lean_response])
+        repl = _make_mock_repl()
+
+        agent = LemmaLeanifier(llm_client=llm, lean_repl=repl)
+        tree = self._make_leanifier_tree()
+        ctx = AgentContext(
+            task="leanify lemmas",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        call_args = llm.complete.call_args
+        assert call_args[1]["temperature"] == 0.0
+        assert call_args[1]["use_cache"] is True
+
+    def test_retries_escalate_temperature(self):
+        """Retry attempts use escalating temperature and disable caching."""
+        from unittest.mock import patch
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        fail_compilation = CompilationResult(
+            status=ToolStatus.ERROR,
+            compilation_status=CompilationStatus.ERROR,
+            errors=["unknown identifier"],
+        )
+        ok_compilation = CompilationResult(
+            status=ToolStatus.SUCCESS,
+            compilation_status=CompilationStatus.OK,
+        )
+
+        lean_response = "```lean\ntheorem sub_1 : True := sorry\n```"
+        llm = _make_mock_llm([lean_response] * 4)
+        repl = _make_mock_repl()
+
+        agent = LemmaLeanifier(
+            llm_client=llm, lean_repl=repl, max_compile_retries=3
+        )
+
+        compilations = [fail_compilation, fail_compilation, fail_compilation, ok_compilation]
+        compile_idx = [0]
+
+        def mock_compile(code):
+            idx = compile_idx[0]
+            compile_idx[0] += 1
+            return compilations[idx]
+
+        with patch.object(agent, "_compile", side_effect=mock_compile):
+            tree = self._make_leanifier_tree()
+            ctx = AgentContext(
+                task="leanify lemmas",
+                metadata={"lemma_tree": tree.model_dump()},
+            )
+            agent.run(ctx)
+
+        assert llm.complete.call_count == 4
+
+        initial_call = llm.complete.call_args_list[0]
+        assert initial_call[1]["temperature"] == 0.0
+        assert initial_call[1]["use_cache"] is True
+
+        for retry_num in range(1, 4):
+            retry_call = llm.complete.call_args_list[retry_num]
+            expected_temp = 0.2 + retry_num * 0.2
+            assert retry_call[1]["temperature"] == expected_temp, (
+                f"Retry {retry_num}: expected temperature {expected_temp}, "
+                f"got {retry_call[1]['temperature']}"
+            )
+            assert retry_call[1]["use_cache"] is False, (
+                f"Retry {retry_num}: expected use_cache=False"
+            )
+
+    def test_axiomatize_keeps_temperature_zero(self):
+        """_axiomatize_node always uses temperature=0.0."""
+        from agentic_research.agents.lemma_leanifier import LemmaLeanifier
+        from agentic_research.models.proof import ProofNode
+
+        lean_response = "```lean\naxiom prior_result : True\n```"
+        llm = _make_mock_llm([lean_response])
+        repl = _make_mock_repl()
+
+        agent = LemmaLeanifier(llm_client=llm, lean_repl=repl)
+
+        node = ProofNode(
+            node_id="sub-1",
+            statement_nl="known result from prior work",
+            from_prior_work=True,
+            source_reference="Smith et al. 2024",
+            depth=1,
+        )
+        agent._axiomatize_node(node, "theorem root : True := sorry", "")
+
+        call_args = llm.complete.call_args
+        assert call_args[1]["temperature"] == 0.0
+        assert call_args[1]["use_cache"] is True
+
+
 class TestProofPipelineDRODetection:
     """Verify ProofPipeline auto-detects DRO keywords and passes preamble."""
 

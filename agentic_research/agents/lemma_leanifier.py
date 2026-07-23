@@ -289,11 +289,12 @@ class LemmaLeanifier(BaseAgent):
             )
             feedback_content += self._definitions_context()
 
+            retry_temperature = 0.2 + retry * 0.2
             response = self._llm.complete(
                 system=LEMMA_LEANIFY_SYSTEM,
                 messages=[{"role": "user", "content": feedback_content}],
-                temperature=0.0,
-                use_cache=True,
+                temperature=retry_temperature,
+                use_cache=False,
             )
             total_tokens.input_tokens += response.token_usage.input_tokens
             total_tokens.output_tokens += response.token_usage.output_tokens

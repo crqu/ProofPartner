@@ -72,6 +72,23 @@ class RecursiveProver(BaseAgent):
         "namespace", "variable", "universe", "abbrev",
     ])
 
+    def _effective_preamble(self, node: ProofNode) -> str:
+        """Return the lean preamble to prepend when compiling code for this node.
+
+        Uses self._lean_preamble if set (DRO problems), otherwise extracts
+        import/open/set_option lines from the node's statement_lean.
+        """
+        if self._lean_preamble:
+            return self._lean_preamble
+        if not node.statement_lean:
+            return ""
+        preamble_lines = []
+        for line in node.statement_lean.strip().split("\n"):
+            first_word = line.strip().split()[0] if line.strip().split() else ""
+            if first_word in self._PREAMBLE_KEYWORDS:
+                preamble_lines.append(line)
+        return "\n".join(preamble_lines)
+
     def __init__(
         self,
         llm_client: LLMClient,
@@ -272,15 +289,11 @@ class RecursiveProver(BaseAgent):
         root_name = node.node_id.replace("-", "_")
         root_stmt = node.statement_lean.strip()
 
-        # Strip preamble lines (import, open, noncomputable abbrev, etc.)
-        # from root statement — it may include the full lean_statement with
-        # imports that would duplicate the preamble we prepend below.
         stripped_lines = []
-        preamble_lines = []
         for line in root_stmt.split("\n"):
             first_word = line.strip().split()[0] if line.strip().split() else ""
             if first_word in self._PREAMBLE_KEYWORDS:
-                preamble_lines.append(line)
+                continue
             elif line.strip():
                 stripped_lines.append(line)
         root_stmt_clean = "\n".join(stripped_lines).strip()
@@ -289,8 +302,7 @@ class RecursiveProver(BaseAgent):
         root_sig = re.sub(r"\s*:=.*$", "", root_sig, flags=re.DOTALL)
         root_decl = f"def {root_name}_skeleton{root_sig} := sorry"
 
-        # Use preamble from root statement if no explicit lean_preamble set
-        effective_preamble = self._lean_preamble or "\n".join(preamble_lines)
+        effective_preamble = self._effective_preamble(node)
         skeleton = child_decls + "\n\n" + root_decl
         if effective_preamble.strip():
             skeleton = effective_preamble.strip() + "\n\n" + skeleton
@@ -452,7 +464,8 @@ class RecursiveProver(BaseAgent):
     _PATCH_ASSEMBLY_MAX_ITERATIONS = 3
 
     def _patch_assembly(
-        self, child_decls: str, tree: LemmaTree, node: ProofNode
+        self, child_decls: str, tree: LemmaTree, node: ProofNode,
+        preamble: str | None = None,
     ) -> str:
         """Hilbert-style post-assembly correction loop.
 
@@ -460,8 +473,10 @@ class RecursiveProver(BaseAgent):
         applies targeted string repairs (re-strip preamble, fix brackets).
         Returns corrected child_decls or original if unfixable.
         """
+        if preamble is None:
+            preamble = self._effective_preamble(node)
         sentinel = child_decls + "\n-- sentinel"
-        compile_code = (self._lean_preamble + "\n\n" + sentinel) if self._lean_preamble else sentinel
+        compile_code = (preamble + "\n\n" + sentinel) if preamble.strip() else sentinel
         compilation = self._repl.execute(compile_code)
         if compilation.compilation_status == CompilationStatus.OK:
             return child_decls
@@ -495,7 +510,7 @@ class RecursiveProver(BaseAgent):
             )
 
             sentinel = child_decls + "\n-- sentinel"
-            compile_code = (self._lean_preamble + "\n\n" + sentinel) if self._lean_preamble else sentinel
+            compile_code = (preamble + "\n\n" + sentinel) if preamble.strip() else sentinel
             compilation = self._repl.execute(compile_code)
             if compilation.compilation_status == CompilationStatus.OK:
                 log.info(
@@ -536,7 +551,9 @@ class RecursiveProver(BaseAgent):
         if not child_decls:
             return False, "", ""
 
-        child_decls = self._patch_assembly(child_decls, tree, node)
+        effective_preamble = self._effective_preamble(node)
+
+        child_decls = self._patch_assembly(child_decls, tree, node, preamble=effective_preamble)
         if not child_decls:
             return False, "", "assembly_unfixable"
 
@@ -545,10 +562,10 @@ class RecursiveProver(BaseAgent):
             child_declarations=child_decls,
         )
 
-        if self._lean_preamble and self._lean_preamble.strip():
+        if effective_preamble.strip():
             user_content = (
                 "## Available Imports (already in scope)\n"
-                f"```lean\n{self._lean_preamble}\n```\n\n" + user_content
+                f"```lean\n{effective_preamble}\n```\n\n" + user_content
             )
 
         if nl_context:
@@ -595,7 +612,7 @@ class RecursiveProver(BaseAgent):
             response = retry_response
 
         proof_code = _extract_lean_code(response.content)
-        compile_code = (self._lean_preamble + "\n\n" + proof_code) if self._lean_preamble else proof_code
+        compile_code = (effective_preamble + "\n\n" + proof_code) if effective_preamble.strip() else proof_code
         compilation = self._repl.execute(compile_code)
 
         errors_str = "\n".join(compilation.errors or [])

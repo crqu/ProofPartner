@@ -75,6 +75,7 @@ def main() -> int:
     log.info("initializing_pipeline", model=model)
 
     from agentic_research.agents.llm_client import LLMClient
+    from agentic_research.agents.nl_prover import NaturalLanguageProver
     from agentic_research.models.agents import ProverConfig
     from agentic_research.pipelines.proof import ProofPipeline
     from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
@@ -89,6 +90,11 @@ def main() -> int:
         max_iterations=3,
     )
 
+    nl_prover = NaturalLanguageProver(
+        llm_client=llm,
+        prover_config=prover_config,
+    )
+
     pipeline = ProofPipeline(
         llm_client=llm,
         lean_repl=repl,
@@ -99,6 +105,7 @@ def main() -> int:
         use_claim_check=True,
         use_proof_critic=True,
         use_proof_detailer=True,
+        nl_prover=nl_prover,
         use_nl_proof_stage=True,
     )
 

@@ -82,7 +82,7 @@ def main() -> int:
 
     llm = LLMClient(model=model, max_tokens=16384)
     repl = LeanRepl(ReplConfig(backend=ReplBackend.SUBPROCESS))
-    search = LeanSearch(SearchConfig(backend=SearchBackend.MOOGLE))
+    search = LeanSearch(SearchConfig(backend=SearchBackend.LOOGLE))
 
     prover_config = ProverConfig(
         use_extended_thinking=True,

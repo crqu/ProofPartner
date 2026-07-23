@@ -1952,6 +1952,473 @@ class TestWeakChildLemmaDetection:
         assert child_node.statement_nl == "stronger claim"
 
 
+# ---------------------------------------------------------------------------
+# Preamble propagation + extended thinking (#105, #106, #107)
+# ---------------------------------------------------------------------------
+
+
+class TestPatchAssemblyPreamble:
+    """Tests for _patch_assembly preamble propagation (#105)."""
+
+    def test_patch_assembly_with_preamble(self):
+        from unittest.mock import patch as mock_patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.tools import CompilationResult, ToolStatus
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        preamble = "import Mathlib\nopen Nat"
+        prover = RecursiveProver(
+            llm_client=llm, lean_repl=repl, lean_preamble=preamble
+        )
+
+        decls = "axiom child_1 (n : ℕ) : n + 0 = n\n-- Use: have <result> := child_1 <args>"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 (n : ℕ) : n + 0 = n",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        execute_calls = []
+
+        def tracking_execute(code):
+            execute_calls.append(code)
+            return CompilationResult(
+                status=ToolStatus.SUCCESS,
+                compilation_status=CompilationStatus.OK,
+            )
+
+        with mock_patch.object(repl, "execute", side_effect=tracking_execute):
+            prover._patch_assembly(decls, tree, tree.nodes["root"])
+
+        assert len(execute_calls) >= 1
+        assert execute_calls[0].startswith(preamble)
+
+    def test_patch_assembly_without_preamble(self):
+        from unittest.mock import patch as mock_patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.tools import CompilationResult, ToolStatus
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(
+            llm_client=llm, lean_repl=repl, lean_preamble=None
+        )
+
+        decls = "axiom child_1 : True\n-- Use: have <result> := child_1 <args>"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        execute_calls = []
+
+        def tracking_execute(code):
+            execute_calls.append(code)
+            return CompilationResult(
+                status=ToolStatus.SUCCESS,
+                compilation_status=CompilationStatus.OK,
+            )
+
+        with mock_patch.object(repl, "execute", side_effect=tracking_execute):
+            prover._patch_assembly(decls, tree, tree.nodes["root"])
+
+        assert len(execute_calls) == 1
+        assert execute_calls[0].startswith("axiom child_1")
+
+    def test_patch_assembly_correction_loop_with_preamble(self):
+        from unittest.mock import patch as mock_patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.tools import CompilationResult, ToolStatus
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        preamble = "import Mathlib\nopen Nat"
+        prover = RecursiveProver(
+            llm_client=llm, lean_repl=repl, lean_preamble=preamble
+        )
+
+        decls = "import Mathlib\naxiom child_1 : True"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        execute_calls = []
+        call_count = [0]
+
+        def tracking_execute(code):
+            execute_calls.append(code)
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return CompilationResult(
+                    status=ToolStatus.SUCCESS,
+                    compilation_status=CompilationStatus.ERROR,
+                    errors=["unknown identifier 'import'"],
+                )
+            return CompilationResult(
+                status=ToolStatus.SUCCESS,
+                compilation_status=CompilationStatus.OK,
+            )
+
+        with mock_patch.object(repl, "execute", side_effect=tracking_execute):
+            prover._patch_assembly(decls, tree, tree.nodes["root"])
+
+        assert len(execute_calls) >= 2
+        assert execute_calls[0].startswith(preamble)
+        assert execute_calls[1].startswith(preamble)
+
+
+class TestParentProofPreamblePrompt:
+    """Tests for parent proof prompt preamble injection (#107)."""
+
+    def test_parent_proof_prompt_includes_preamble(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+            lean_preamble="import Mathlib",
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        parent_call = llm.complete.call_args_list[0]
+        user_msg = parent_call[1]["messages"][0]["content"]
+        assert "Available Imports" in user_msg
+        assert "import Mathlib" in user_msg
+
+    def test_parent_proof_prompt_no_preamble(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+            lean_preamble=None,
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        parent_call = llm.complete.call_args_list[0]
+        user_msg = parent_call[1]["messages"][0]["content"]
+        assert "Available Imports" not in user_msg
+
+    def test_parent_proof_prompt_empty_preamble(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+            lean_preamble="",
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        parent_call = llm.complete.call_args_list[0]
+        user_msg = parent_call[1]["messages"][0]["content"]
+        assert "Available Imports" not in user_msg
+
+
+class TestParentProofExtendedThinking:
+    """Tests for extended thinking in parent proofs (#106)."""
+
+    def test_parent_proof_extended_thinking_enabled(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        config = ProverConfig(
+            max_iterations=1,
+            use_extended_thinking=True,
+            thinking_budget=10000,
+        )
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=config,
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        parent_call = llm.complete.call_args_list[0]
+        assert parent_call[1]["use_extended_thinking"] is True
+        assert parent_call[1]["thinking_budget"] == 10000
+
+    def test_parent_proof_extended_thinking_disabled(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=ProverConfig(max_iterations=1),
+        )
+        ctx = AgentContext(
+            task="prove",
+            metadata={"lemma_tree": tree.model_dump()},
+        )
+        agent.run(ctx)
+
+        parent_call = llm.complete.call_args_list[0]
+        assert parent_call[1]["use_extended_thinking"] is False
+
+
+class TestPreambleConsistencyAllPaths:
+    """Integration test: all three preamble/thinking paths are consistent (#105, #106, #107)."""
+
+    def test_preamble_consistency_all_paths(self):
+        from unittest.mock import patch as mock_patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="parent",
+                    statement_lean="theorem parent := sorry",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean="theorem child_1 : True := sorry",
+                    depth=1,
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        llm = _make_mock_llm([
+            "```lean\ntheorem parent := trivial\n```",
+            "```lean\ntheorem child_1 : True := trivial\n```",
+        ])
+        repl = _make_mock_repl()
+        preamble = "import Mathlib\nopen Nat"
+
+        config = ProverConfig(
+            max_iterations=1,
+            use_extended_thinking=True,
+            thinking_budget=15000,
+        )
+        agent = RecursiveProver(
+            llm_client=llm,
+            lean_repl=repl,
+            prover_config=config,
+            lean_preamble=preamble,
+        )
+
+        repl_calls = []
+        original_execute = repl.execute
+
+        def tracking_execute(code):
+            repl_calls.append(code)
+            return original_execute(code)
+
+        with mock_patch.object(repl, "execute", side_effect=tracking_execute):
+            ctx = AgentContext(
+                task="prove",
+                metadata={"lemma_tree": tree.model_dump()},
+            )
+            agent.run(ctx)
+
+        patch_assembly_calls = [c for c in repl_calls if "-- sentinel" in c]
+        assert len(patch_assembly_calls) >= 1
+        assert all(c.startswith(preamble) for c in patch_assembly_calls)
+
+        parent_call = llm.complete.call_args_list[0]
+        user_msg = parent_call[1]["messages"][0]["content"]
+        assert "Available Imports" in user_msg
+        assert "import Mathlib" in user_msg
+
+        assert parent_call[1]["use_extended_thinking"] is True
+        assert parent_call[1]["thinking_budget"] == 15000
+
+
 class TestPipelineWeakChildRetry:
     """Verify ProofPipeline retries LemmaBreakdown on WEAK_CHILD_LEMMA."""
 

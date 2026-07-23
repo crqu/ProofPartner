@@ -380,7 +380,8 @@ class RecursiveProver(BaseAgent):
         Returns corrected child_decls or original if unfixable.
         """
         sentinel = child_decls + "\n-- sentinel"
-        compilation = self._repl.execute(sentinel)
+        compile_code = (self._lean_preamble + "\n\n" + sentinel) if self._lean_preamble else sentinel
+        compilation = self._repl.execute(compile_code)
         if compilation.compilation_status == CompilationStatus.OK:
             return child_decls
 
@@ -413,7 +414,8 @@ class RecursiveProver(BaseAgent):
             )
 
             sentinel = child_decls + "\n-- sentinel"
-            compilation = self._repl.execute(sentinel)
+            compile_code = (self._lean_preamble + "\n\n" + sentinel) if self._lean_preamble else sentinel
+            compilation = self._repl.execute(compile_code)
             if compilation.compilation_status == CompilationStatus.OK:
                 log.info(
                     "patch_assembly_fixed",
@@ -462,6 +464,12 @@ class RecursiveProver(BaseAgent):
             child_declarations=child_decls,
         )
 
+        if self._lean_preamble and self._lean_preamble.strip():
+            user_content = (
+                f"## Available Imports (already in scope)\n```lean\n{self._lean_preamble}\n```\n\n"
+                + user_content
+            )
+
         if nl_context:
             user_content += f"\n\n{nl_context}"
 
@@ -473,10 +481,18 @@ class RecursiveProver(BaseAgent):
                 "Fix the errors above. Try a DIFFERENT proof approach."
             )
 
+        if self._prover_config.use_extended_thinking:
+            log.info(
+                "recursive_prover_extended_thinking_enabled",
+                node_id=node.node_id,
+                thinking_budget=self._prover_config.thinking_budget,
+            )
+
         response = self._llm.complete(
             system=PARENT_PROOF_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
             use_extended_thinking=self._prover_config.use_extended_thinking,
+            thinking_budget=self._prover_config.thinking_budget,
             use_cache=True,
         )
         tokens.input_tokens += response.token_usage.input_tokens
@@ -534,6 +550,12 @@ class RecursiveProver(BaseAgent):
             failed_proof=node.proof_code or "-- no proof attempt",
             errors="Parent proof did not compile or close all goals",
         )
+
+        if self._lean_preamble and self._lean_preamble.strip():
+            user_content = (
+                f"## Available Imports (already in scope)\n```lean\n{self._lean_preamble}\n```\n\n"
+                + user_content
+            )
 
         response = self._llm.complete(
             system=FAILURE_DIAGNOSIS_SYSTEM,

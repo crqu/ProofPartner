@@ -32,6 +32,7 @@ class FailureType(str, Enum):
     CONTRADICTORY_CHILD = "contradictory_child"
     STUCK_GOAL = "stuck_goal"
     ASSEMBLY_ERROR = "assembly_error"
+    TRUNCATED = "truncated"
 
 
 class FailureDiagnosis(BaseModel):

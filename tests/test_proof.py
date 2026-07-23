@@ -776,7 +776,7 @@ class TestRecursiveProver:
 
 
 class TestFormatChildDeclaration:
-    def test_axiom_node_gets_axiom_prefix(self):
+    def test_sorry_def_node_gets_def_prefix(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         child = ProofNode(
@@ -786,10 +786,11 @@ class TestFormatChildDeclaration:
             from_prior_work=True,
         )
         result = RecursiveProver._format_child_declaration(child)
-        assert result.startswith("axiom lemma_1 :")
+        assert result.startswith("def lemma_1 :")
+        assert ":= sorry" in result
         assert "-- Use: have <result> := lemma_1 <args>" in result
 
-    def test_non_axiom_node_converted_to_axiom(self):
+    def test_theorem_node_converted_to_def_sorry(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         child = ProofNode(
@@ -799,11 +800,11 @@ class TestFormatChildDeclaration:
             from_prior_work=False,
         )
         result = RecursiveProver._format_child_declaration(child)
-        assert result.startswith("axiom lemma_2")
-        assert "sorry" not in result.split("\n")[0]
+        assert result.startswith("def lemma_2")
+        assert ":= sorry" in result.split("\n")[0]
         assert "-- Use: have <result> := lemma_2 <args>" in result
 
-    def test_axiom_node_already_prefixed(self):
+    def test_axiom_node_converted_to_def_sorry(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         child = ProofNode(
@@ -813,8 +814,8 @@ class TestFormatChildDeclaration:
             from_prior_work=True,
         )
         result = RecursiveProver._format_child_declaration(child)
-        assert result.startswith("axiom prokhorov_compact")
-        assert "axiom lemma_3" not in result
+        assert result.startswith("def lemma_3")
+        assert ":= sorry" in result
 
     def test_strip_single_import(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
@@ -825,9 +826,9 @@ class TestFormatChildDeclaration:
             statement_lean="import Mathlib\n\ntheorem lemma_1 : True := sorry",
         )
         result = RecursiveProver._format_child_declaration(child)
-        assert result.startswith("axiom lemma_1")
+        assert result.startswith("def lemma_1")
         assert "import" not in result.split("\n")[0]
-        assert "sorry" not in result
+        assert ":= sorry" in result
 
     def test_strip_open_directive(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
@@ -852,7 +853,7 @@ class TestFormatChildDeclaration:
         )
         result = RecursiveProver._format_child_declaration(child)
         assert "set_option" not in result
-        assert result.startswith("axiom lemma_3")
+        assert result.startswith("def lemma_3")
 
     def test_multiline_theorem_with_preamble(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
@@ -871,7 +872,8 @@ class TestFormatChildDeclaration:
         assert "open Topology" not in result
         assert "(X : Type*)" in result
         assert "[TopologicalSpace X]" in result
-        assert "sorry" not in result
+        assert result.startswith("def lemma_4")
+        assert ":= sorry" in result
 
     def test_strip_multiple_imports(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
@@ -887,7 +889,7 @@ class TestFormatChildDeclaration:
         )
         result = RecursiveProver._format_child_declaration(child)
         assert "import" not in result
-        assert result.startswith("axiom lemma_5")
+        assert result.startswith("def lemma_5")
         assert "(s : Finset ℕ)" in result
 
     def test_empty_after_strip(self):
@@ -1698,7 +1700,7 @@ class TestProofCriticRetryFeedback:
 class TestParentBeforeChildrenSorryStubs:
     """Verify parent proof receives child axiom declarations as context."""
 
-    def test_parent_proof_includes_child_axiom_stubs(self):
+    def test_parent_proof_includes_child_sorry_stubs(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         tree = LemmaTree(
@@ -1748,12 +1750,12 @@ class TestParentBeforeChildrenSorryStubs:
 
         parent_call = llm.complete.call_args_list[0]
         user_msg = parent_call[1]["messages"][0]["content"]
-        assert "axiom child_1" in user_msg
-        assert "axiom child_2" in user_msg
-        assert "sorry" not in user_msg.split("Child Lemma Declarations")[1]
+        assert "def child_1" in user_msg
+        assert "def child_2" in user_msg
+        assert ":= sorry" in user_msg
 
-    def test_child_declarations_formatted_as_axioms(self):
-        """All children (not just from_prior_work) become axiom declarations."""
+    def test_child_declarations_formatted_as_def_sorry(self):
+        """All children become def ... := sorry declarations."""
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         regular_child = ProofNode(
@@ -1763,10 +1765,10 @@ class TestParentBeforeChildrenSorryStubs:
             from_prior_work=False,
         )
         result = RecursiveProver._format_child_declaration(regular_child)
-        assert result.startswith("axiom lemma_1")
-        assert "sorry" not in result.split("\n")[0]
+        assert result.startswith("def lemma_1")
+        assert ":= sorry" in result.split("\n")[0]
 
-    def test_child_declaration_preserves_axiom_prefix(self):
+    def test_child_declaration_converts_axiom_to_def_sorry(self):
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         child = ProofNode(
@@ -1776,8 +1778,9 @@ class TestParentBeforeChildrenSorryStubs:
             from_prior_work=True,
         )
         result = RecursiveProver._format_child_declaration(child)
-        assert result.startswith("axiom lemma_3")
-        assert result.count("axiom") == 1
+        assert result.startswith("def lemma_3")
+        assert ":= sorry" in result
+        assert "axiom" not in result
 
 
 class TestWeakChildLemmaDetection:

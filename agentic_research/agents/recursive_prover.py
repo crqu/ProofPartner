@@ -251,8 +251,53 @@ class RecursiveProver(BaseAgent):
             )
         return False
 
+    def _validate_skeleton(self, tree: LemmaTree, node: ProofNode) -> bool:
+        """Validate that sorry-first child declarations + parent compile together.
+
+        Assembles all child `def ... := sorry` + parent `def root : T := sorry`,
+        compiles via REPL with preamble, and returns True if skeleton parses.
+        Fast-fails in ~1s before expensive child proving.
+        """
+        children = tree.get_children(node.node_id)
+        child_decls = "\n\n".join(
+            self._format_child_declaration(c)
+            for c in children if c.statement_lean
+        )
+        if not child_decls:
+            return True
+
+        root_name = node.node_id.replace("-", "_")
+        root_stmt = node.statement_lean.strip()
+        root_sig = re.sub(r"^(?:theorem|lemma|def)\s+\S+", "", root_stmt)
+        root_sig = re.sub(r"\s*:=\s*(?:by\s+)?sorry\s*$", "", root_sig)
+        root_decl = f"def {root_name}_skeleton{root_sig} := sorry"
+
+        skeleton = child_decls + "\n\n" + root_decl
+        if self._lean_preamble:
+            skeleton = self._lean_preamble + "\n\n" + skeleton
+
+        compilation = self._repl.execute(skeleton)
+        if compilation.compilation_status == CompilationStatus.OK:
+            log.info("skeleton_validation_passed", node_id=node.node_id)
+            return True
+
+        log.warning(
+            "skeleton_validation_failed",
+            node_id=node.node_id,
+            errors=compilation.errors,
+        )
+        return False
+
     def _prove_parent(self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage) -> bool:
         """Parent-before-children: prove parent using child sorry-premises, then recurse."""
+        if not self._validate_skeleton(tree, node):
+            node.status = NodeStatus.FAILED
+            node.failure_diagnosis = FailureDiagnosis(
+                failure_type=FailureType.ASSEMBLY_ERROR,
+                description="Skeleton validation failed — child declarations do not compile with parent",
+            )
+            return False
+
         nl_context, _ = self._generate_nl_context(node, tokens)
 
         previous_proof: str | None = None
@@ -331,10 +376,11 @@ class RecursiveProver(BaseAgent):
 
     @classmethod
     def _format_child_declaration(cls, child: ProofNode) -> str:
-        """Format a child node as an axiom declaration with usage hint.
+        """Format a child node as a sorry-first def declaration with usage hint.
 
-        All children are declared as axioms (not theorems with sorry) so the
-        parent proof compiles without sorry warnings.
+        Uses `def child_N : T := sorry` instead of `axiom` so that set-builder
+        notation (`{n : ℕ | P n}`) parses correctly — `:=` establishes an
+        expression context where `{` is unambiguously set-builder syntax.
         """
         stmt = child.statement_lean.strip()
         name = child.node_id.replace("-", "_")
@@ -358,14 +404,18 @@ class RecursiveProver(BaseAgent):
                 original_len=len(child.statement_lean),
             )
 
-        if stmt.startswith("axiom "):
-            pass
+        if stmt.startswith("def "):
+            if ":= sorry" not in stmt:
+                stmt = re.sub(r"\s*:=.*$", " := sorry", stmt)
+        elif stmt.startswith("axiom "):
+            sig = re.sub(r"^axiom\s+\S+", "", stmt)
+            stmt = f"def {name}{sig} := sorry"
         elif stmt.startswith("theorem ") or stmt.startswith("lemma "):
             sig = re.sub(r"^(?:theorem|lemma)\s+\S+", "", stmt)
             sig = re.sub(r"\s*:=\s*(?:by\s+)?sorry\s*$", "", sig)
-            stmt = f"axiom {name}{sig}"
+            stmt = f"def {name}{sig} := sorry"
         else:
-            stmt = f"axiom {name} : {stmt}"
+            stmt = f"def {name} : {stmt} := sorry"
         return f"{stmt}\n-- Use: have <result> := {name} <args>"
 
     _PATCH_ASSEMBLY_MAX_ITERATIONS = 3
@@ -380,7 +430,8 @@ class RecursiveProver(BaseAgent):
         Returns corrected child_decls or original if unfixable.
         """
         sentinel = child_decls + "\n-- sentinel"
-        compilation = self._repl.execute(sentinel)
+        compile_code = (self._lean_preamble + "\n\n" + sentinel) if self._lean_preamble else sentinel
+        compilation = self._repl.execute(compile_code)
         if compilation.compilation_status == CompilationStatus.OK:
             return child_decls
 
@@ -409,11 +460,12 @@ class RecursiveProver(BaseAgent):
                 child_decls += "}" * open_braces
 
             child_decls = re.sub(
-                r"\b(axiom|theorem|lemma)\s+\1\b", r"\1", child_decls
+                r"\b(axiom|theorem|lemma|def)\s+\1\b", r"\1", child_decls
             )
 
             sentinel = child_decls + "\n-- sentinel"
-            compilation = self._repl.execute(sentinel)
+            compile_code = (self._lean_preamble + "\n\n" + sentinel) if self._lean_preamble else sentinel
+            compilation = self._repl.execute(compile_code)
             if compilation.compilation_status == CompilationStatus.OK:
                 log.info(
                     "patch_assembly_fixed",
@@ -462,6 +514,12 @@ class RecursiveProver(BaseAgent):
             child_declarations=child_decls,
         )
 
+        if self._lean_preamble and self._lean_preamble.strip():
+            user_content = (
+                "## Available Imports (already in scope)\n"
+                f"```lean\n{self._lean_preamble}\n```\n\n" + user_content
+            )
+
         if nl_context:
             user_content += f"\n\n{nl_context}"
 
@@ -482,6 +540,29 @@ class RecursiveProver(BaseAgent):
         tokens.input_tokens += response.token_usage.input_tokens
         tokens.output_tokens += response.token_usage.output_tokens
 
+        if response.stop_reason == "max_tokens":
+            log.warning(
+                "proof_truncated",
+                node_id=node.node_id,
+                stop_reason="max_tokens",
+            )
+            retry_response = self._llm.complete(
+                system=PARENT_PROOF_SYSTEM,
+                messages=[{"role": "user", "content": user_content}],
+                max_tokens=32768,
+                use_extended_thinking=self._prover_config.use_extended_thinking,
+                use_cache=True,
+            )
+            tokens.input_tokens += retry_response.token_usage.input_tokens
+            tokens.output_tokens += retry_response.token_usage.output_tokens
+            if retry_response.stop_reason == "max_tokens":
+                log.warning(
+                    "proof_truncated_after_retry",
+                    node_id=node.node_id,
+                )
+                return False, _extract_lean_code(retry_response.content), "truncated:max_tokens"
+            response = retry_response
+
         proof_code = _extract_lean_code(response.content)
         compile_code = (self._lean_preamble + "\n\n" + proof_code) if self._lean_preamble else proof_code
         compilation = self._repl.execute(compile_code)
@@ -495,6 +576,7 @@ class RecursiveProver(BaseAgent):
         return False, proof_code, errors_str
 
     _ASSEMBLY_ERROR_PATTERNS = [
+        ("unexpected token", "def"),
         ("unexpected token", "axiom"),
         ("unknown identifier 'import'", ""),
         ("unknown identifier 'open'", ""),
@@ -510,6 +592,12 @@ class RecursiveProver(BaseAgent):
     ) -> FailureDiagnosis:
         """Use LLM to classify why the parent proof failed."""
         errors_str = errors_hint
+
+        if "truncated:max_tokens" in errors_str:
+            return FailureDiagnosis(
+                failure_type=FailureType.TRUNCATED,
+                description="Proof output was truncated (max_tokens reached after retry)",
+            )
 
         for pattern_a, pattern_b in self._ASSEMBLY_ERROR_PATTERNS:
             if pattern_a in errors_str and (not pattern_b or pattern_b in errors_str):
@@ -534,6 +622,12 @@ class RecursiveProver(BaseAgent):
             failed_proof=node.proof_code or "-- no proof attempt",
             errors="Parent proof did not compile or close all goals",
         )
+
+        if self._lean_preamble and self._lean_preamble.strip():
+            user_content = (
+                "## Available Imports (already in scope)\n"
+                f"```lean\n{self._lean_preamble}\n```\n\n" + user_content
+            )
 
         response = self._llm.complete(
             system=FAILURE_DIAGNOSIS_SYSTEM,

@@ -1705,3 +1705,274 @@ class TestPipelineWiringH2H3H4H5:
         assert captured_kwargs["leanifier"] is not None
         assert captured_kwargs["breakdown"] is not None
         assert captured_kwargs["proof_corrector"] is not None
+
+
+# ---------------------------------------------------------------------------
+# H1 (Issues #110-112): Sorry-first skeleton + truncation handling
+# ---------------------------------------------------------------------------
+
+
+class TestSorryFirstSkeletonAndTruncation:
+    """Tests for sorry-first child declarations, skeleton validation,
+    preamble propagation in patch_assembly/prompts, and truncation handling."""
+
+    @staticmethod
+    def _make_prover(**kwargs):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        defaults = dict(
+            llm_client=_make_mock_llm([]),
+            lean_repl=_make_mock_repl(),
+        )
+        defaults.update(kwargs)
+        return RecursiveProver(**defaults)
+
+    @staticmethod
+    def _make_tree_with_child(child_stmt: str = "theorem child_1 : True := sorry"):
+        from agentic_research.models.proof import LemmaTree, ProofNode
+        return LemmaTree(
+            root_id="root",
+            topological_order=["child_1", "root"],
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="root",
+                    statement_lean="theorem root : True := sorry",
+                    depth=0,
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="child",
+                    statement_lean=child_stmt,
+                    parent_id="root",
+                    depth=1,
+                ),
+            },
+        )
+
+    # 1. test_format_child_declaration_sorry_format
+    def test_format_child_declaration_sorry_format(self):
+        """Child declarations use 'def ... := sorry' not 'axiom'."""
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.proof import ProofNode
+
+        child = ProofNode(
+            node_id="child-1",
+            statement_nl="child about sets",
+            statement_lean="theorem child_1 : {n : ℕ | 0 < n} = {1} := sorry",
+            depth=1,
+        )
+        decl = RecursiveProver._format_child_declaration(child)
+        assert decl.startswith("def child_1")
+        assert ":= sorry" in decl
+        assert "axiom" not in decl
+        assert "-- Use: have <result> := child_1 <args>" in decl
+
+    # 2. test_validate_skeleton_fast_fail
+    def test_validate_skeleton_fast_fail(self):
+        """Skeleton validation failure prevents entering retry loop."""
+        from unittest.mock import patch
+        from agentic_research.models.proof import FailureType
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        tree = self._make_tree_with_child()
+
+        fail_compilation = CompilationResult(
+            status=ToolStatus.ERROR,
+            compilation_status=CompilationStatus.ERROR,
+            errors=["type mismatch"],
+        )
+
+        prover = self._make_prover()
+        with patch.object(prover._repl, "execute", return_value=fail_compilation):
+            tokens = TokenUsage()
+            result = prover._prove_parent(tree, tree.nodes["root"], tokens)
+
+        assert result is False
+        assert tree.nodes["root"].failure_diagnosis is not None
+        assert tree.nodes["root"].failure_diagnosis.failure_type == FailureType.ASSEMBLY_ERROR
+
+    # 3. test_validate_skeleton_passes
+    def test_validate_skeleton_passes(self):
+        """Skeleton validation passes → proceeds to child proving."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        tree = self._make_tree_with_child()
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+
+        response = "```lean\ntheorem root : True := trivial\n```"
+        llm = _make_mock_llm([
+            response,
+            '{"failure_type": "stuck_goal", "description": "failed"}',
+        ])
+        prover = self._make_prover(llm_client=llm, max_retries_per_node=1)
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation):
+            tokens = TokenUsage()
+            prover._prove_parent(tree, tree.nodes["root"], tokens)
+
+        assert llm.complete.call_count >= 1
+
+    # 4. test_patch_assembly_includes_preamble
+    def test_patch_assembly_includes_preamble(self):
+        """_patch_assembly prepends preamble to REPL compile calls."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+        preamble = "import Mathlib\nopen Set"
+
+        prover = self._make_prover(lean_preamble=preamble)
+        tree = self._make_tree_with_child()
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation) as spy:
+            prover._patch_assembly("def child_1 : True := sorry", tree, tree.nodes["root"])
+            compiled_code = spy.call_args[0][0]
+            assert preamble in compiled_code
+
+    # 5. test_patch_assembly_preamble_none
+    def test_patch_assembly_preamble_none(self):
+        """_patch_assembly with lean_preamble=None doesn't raise TypeError."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+
+        prover = self._make_prover(lean_preamble=None)
+        tree = self._make_tree_with_child()
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation) as spy:
+            result = prover._patch_assembly("def child_1 : True := sorry", tree, tree.nodes["root"])
+            assert result == "def child_1 : True := sorry"
+            compiled_code = spy.call_args[0][0]
+            assert "import" not in compiled_code
+
+    # 6. test_parent_proof_prompt_includes_preamble
+    def test_parent_proof_prompt_includes_preamble(self):
+        """Parent proof LLM prompt includes 'Available Imports' section."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+        preamble = "import Mathlib\nopen Finset"
+
+        response = "```lean\ntheorem root : True := trivial\n```"
+        llm = _make_mock_llm([response])
+        prover = self._make_prover(llm_client=llm, lean_preamble=preamble)
+        tree = self._make_tree_with_child()
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation):
+            tokens = TokenUsage()
+            prover._prove_parent_with_children(tree, tree.nodes["root"], tokens)
+
+        call_args = llm.complete.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "Available Imports" in prompt
+        assert "import Mathlib" in prompt
+
+    # 7. test_parent_proof_prompt_empty_preamble
+    def test_parent_proof_prompt_empty_preamble(self):
+        """Empty lean_preamble doesn't produce empty 'Available Imports' block."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+
+        response = "```lean\ntheorem root : True := trivial\n```"
+        llm = _make_mock_llm([response])
+        prover = self._make_prover(llm_client=llm, lean_preamble="")
+        tree = self._make_tree_with_child()
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation):
+            tokens = TokenUsage()
+            prover._prove_parent_with_children(tree, tree.nodes["root"], tokens)
+
+        call_args = llm.complete.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "Available Imports" not in prompt
+
+    # 8. test_truncation_retry_with_higher_limit
+    def test_truncation_retry_with_higher_limit(self):
+        """Truncated response triggers retry with max_tokens=32768."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+
+        truncated = LLMResponse(
+            content="```lean\nincomplete\n```",
+            model="claude-opus-4-6-20250616",
+            stop_reason="max_tokens",
+            token_usage=TokenUsage(input_tokens=100, output_tokens=16384),
+        )
+        success = LLMResponse(
+            content="```lean\ntheorem root : True := trivial\n```",
+            model="claude-opus-4-6-20250616",
+            stop_reason="end_turn",
+            token_usage=TokenUsage(input_tokens=100, output_tokens=500),
+        )
+
+        llm = _make_mock_llm([])
+        llm.complete.side_effect = [truncated, success]
+        prover = self._make_prover(llm_client=llm)
+        tree = self._make_tree_with_child()
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation):
+            tokens = TokenUsage()
+            proved, _, _ = prover._prove_parent_with_children(tree, tree.nodes["root"], tokens)
+
+        assert llm.complete.call_count == 2
+        retry_call = llm.complete.call_args_list[1]
+        assert retry_call[1]["max_tokens"] == 32768
+
+    # 9. test_truncation_classified_correctly
+    def test_truncation_classified_correctly(self):
+        """Persistent truncation classified as FailureType.TRUNCATED."""
+        from agentic_research.models.proof import FailureType, ProofNode
+
+        prover = self._make_prover()
+
+        diagnosis = prover._diagnose_failure(
+            self._make_tree_with_child(),
+            ProofNode(
+                node_id="root",
+                statement_nl="root",
+                statement_lean="theorem root : True := sorry",
+                depth=0,
+                children=["child_1"],
+            ),
+            TokenUsage(),
+            errors_hint="truncated:max_tokens",
+        )
+        assert diagnosis.failure_type == FailureType.TRUNCATED
+
+    # 10. test_sorry_first_skeleton_full_flow (integration)
+    def test_sorry_first_skeleton_full_flow(self):
+        """Full _prove_parent with sorry-first declarations + preamble + truncation."""
+        from unittest.mock import patch
+        from agentic_research.models.tools import CompilationResult, CompilationStatus, ToolStatus
+
+        ok_compilation = CompilationResult(status=ToolStatus.SUCCESS, compilation_status=CompilationStatus.OK)
+        preamble = "import Mathlib"
+
+        proof_response = "```lean\ntheorem root : True := trivial\n```"
+        diagnosis_response = '{"failure_type": "stuck_goal", "description": "failed"}'
+        llm = _make_mock_llm([proof_response, diagnosis_response])
+        prover = self._make_prover(
+            llm_client=llm,
+            lean_preamble=preamble,
+            max_retries_per_node=1,
+        )
+        tree = self._make_tree_with_child(
+            "theorem child_1 : {n : ℕ | 0 < n} = {1} := sorry"
+        )
+
+        with patch.object(prover._repl, "execute", return_value=ok_compilation):
+            tokens = TokenUsage()
+            prover._prove_parent(tree, tree.nodes["root"], tokens)
+
+        assert llm.complete.call_count >= 1
+        call_args = llm.complete.call_args_list[0]
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "Available Imports" in prompt

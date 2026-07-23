@@ -902,6 +902,106 @@ class TestFormatChildDeclaration:
         assert "lemma_6" in result
         assert not result.startswith("axiom lemma_6 : import")
 
+    def test_patch_assembly_noop(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        decls = "axiom child_1 : True\n-- Use: have <result> := child_1 <args>"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := by exact child_1",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+        result = prover._patch_assembly(decls, tree, tree.nodes["root"])
+        assert result == decls
+
+    def test_patch_assembly_strips_residual_imports(self):
+        from agentic_research.agents.recursive_prover import RecursiveProver
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        decls = "import Mathlib\naxiom child_1 : True -- MOCK_ERROR"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := by exact child_1",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+        result = prover._patch_assembly(decls, tree, tree.nodes["root"])
+        assert "import" not in result
+        assert "axiom child_1" in result
+
+    def test_patch_assembly_exhaustion(self):
+        from unittest.mock import patch
+        from agentic_research.agents.recursive_prover import RecursiveProver
+        from agentic_research.models.tools import CompilationResult, ToolStatus
+
+        llm = _make_mock_llm([])
+        repl = _make_mock_repl()
+        prover = RecursiveProver(llm_client=llm, lean_repl=repl)
+
+        decls = "axiom child_1 : True"
+        tree = LemmaTree(
+            root_id="root",
+            nodes={
+                "root": ProofNode(
+                    node_id="root",
+                    statement_nl="main",
+                    statement_lean="theorem main := by exact child_1",
+                    children=["child_1"],
+                ),
+                "child_1": ProofNode(
+                    node_id="child_1",
+                    statement_nl="helper",
+                    statement_lean="axiom child_1 : True",
+                    parent_id="root",
+                ),
+            },
+            topological_order=["child_1", "root"],
+        )
+
+        def always_fail(code):
+            return CompilationResult(
+                status=ToolStatus.SUCCESS,
+                compilation_status=CompilationStatus.ERROR,
+                errors=["some unfixable error"],
+            )
+
+        with patch.object(repl, "execute", side_effect=always_fail):
+            result = prover._patch_assembly(decls, tree, tree.nodes["root"])
+
+        assert result == decls
+
     def test_assembly_error_failure_type(self):
         assert FailureType.ASSEMBLY_ERROR == "assembly_error"
 
@@ -919,11 +1019,6 @@ class TestFormatChildDeclaration:
                     statement_nl="main",
                     statement_lean="theorem main := sorry",
                     children=["child_1"],
-                    failure_diagnosis=FailureDiagnosis(
-                        failure_type=FailureType.STUCK_GOAL,
-                        description="unexpected token at axiom declaration",
-                        lean_errors=["unexpected token '}'; expected '=>'"],
-                    ),
                 ),
                 "child_1": ProofNode(
                     node_id="child_1",
@@ -935,7 +1030,10 @@ class TestFormatChildDeclaration:
             topological_order=["child_1", "root"],
         )
         tokens = TokenUsage()
-        diagnosis = prover._diagnose_failure(tree, tree.nodes["root"], tokens)
+        diagnosis = prover._diagnose_failure(
+            tree, tree.nodes["root"], tokens,
+            errors_hint="unexpected token '}'; expected '=>' at axiom declaration",
+        )
         assert diagnosis.failure_type == FailureType.ASSEMBLY_ERROR
 
     def test_retry_early_exit_identical_errors(self):

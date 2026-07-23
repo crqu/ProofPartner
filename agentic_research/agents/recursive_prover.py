@@ -281,7 +281,7 @@ class RecursiveProver(BaseAgent):
                 previous_proof = attempt_code
                 previous_errors = attempt_errors
 
-                diagnosis = self._diagnose_failure(tree, node, tokens)
+                diagnosis = self._diagnose_failure(tree, node, tokens, errors_hint=attempt_errors)
                 node.failure_diagnosis = diagnosis
 
                 if diagnosis and diagnosis.failure_type in (
@@ -502,14 +502,14 @@ class RecursiveProver(BaseAgent):
     ]
 
     def _diagnose_failure(
-        self, tree: LemmaTree, node: ProofNode, tokens: TokenUsage
+        self,
+        tree: LemmaTree,
+        node: ProofNode,
+        tokens: TokenUsage,
+        errors_hint: str = "",
     ) -> FailureDiagnosis:
         """Use LLM to classify why the parent proof failed."""
-        errors_str = node.failure_diagnosis.description if node.failure_diagnosis else ""
-        if not errors_str and node.proof_code:
-            errors_str = ""
-        for proof_err in (node.failure_diagnosis.lean_errors if node.failure_diagnosis else []):
-            errors_str += " " + proof_err
+        errors_str = errors_hint
 
         for pattern_a, pattern_b in self._ASSEMBLY_ERROR_PATTERNS:
             if pattern_a in errors_str and (not pattern_b or pattern_b in errors_str):

@@ -31,6 +31,7 @@ class FailureType(str, Enum):
     WEAK_CHILD_LEMMA = "weak_child_lemma"
     CONTRADICTORY_CHILD = "contradictory_child"
     STUCK_GOAL = "stuck_goal"
+    ASSEMBLY_ERROR = "assembly_error"
 
 
 class FailureDiagnosis(BaseModel):

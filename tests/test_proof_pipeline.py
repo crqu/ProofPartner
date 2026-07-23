@@ -428,7 +428,6 @@ class TestClaimCheckFallthrough:
     def test_direct_proof_claim_check_failure_falls_through_to_decomposition(self):
         """Direct proof compiles but claim_check fails → decomposition runs."""
         from unittest.mock import patch
-        from agentic_research.pipelines.proof import ProofPipeline
 
         pipeline = _make_pipeline(use_claim_check=True)
 
@@ -451,7 +450,6 @@ class TestClaimCheckFallthrough:
     def test_corrected_proof_claim_check_failure_falls_through_to_decomposition(self):
         """Corrected proof compiles but claim_check fails → decomposition runs."""
         from unittest.mock import patch
-        from agentic_research.pipelines.proof import ProofPipeline
 
         pipeline = _make_pipeline(use_claim_check=True)
 
@@ -499,7 +497,6 @@ class TestClaimCheckFallthrough:
     def test_direct_proof_claim_check_pass_still_returns_success(self):
         """Direct proof with passing claim_check still returns success."""
         from unittest.mock import patch
-        from agentic_research.pipelines.proof import ProofPipeline
 
         pipeline = _make_pipeline(use_claim_check=True)
 
@@ -856,7 +853,6 @@ class TestH1NLProofContextRetries:
     def test_critic_retry_passes_nl_context(self):
         """Critic retry path forwards nl_proof_context and tactic_hints to breakdown."""
         from unittest.mock import patch, MagicMock
-        from agentic_research.agents.proof_detailer import ProofDetailer
         from agentic_research.models.proof import (
             CritiqueIssue, CritiqueIssueType, CritiqueResult, LemmaTree, NLProofSketch,
             NLProofStep, ProofNode, RecursiveProofResult,
@@ -943,8 +939,7 @@ class TestH1NLProofContextRetries:
         """_retry_on_weak_children forwards nl_proof_context and tactic_hints."""
         from unittest.mock import patch
         from agentic_research.models.proof import (
-            NLProofSketch, NLProofStep, LemmaTree, ProofNode,
-            RecursiveProofResult, CritiqueIssue, CritiqueIssueType,
+            NLProofSketch, NLProofStep, CritiqueIssue, CritiqueIssueType,
         )
 
         pipeline = _make_pipeline(use_proof_critic=False)
@@ -1015,7 +1010,7 @@ class TestH2ReleanifyReformulatedChildren:
 
     def test_reformulated_child_gets_releanified(self):
         """After reformulation with leanifier, child gets statement_lean set."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock
         from agentic_research.agents.recursive_prover import RecursiveProver
         from agentic_research.models.proof import LemmaTree, ProofNode, FailureDiagnosis, FailureType
 
@@ -1196,7 +1191,6 @@ class TestH3NLProverPerNode:
 
     def test_parent_proof_includes_nl_context(self):
         """_prove_parent_with_children appends NL context to the prompt."""
-        from unittest.mock import patch
         from agentic_research.agents.recursive_prover import RecursiveProver
         from agentic_research.models.proof import LemmaTree, ProofNode
 
@@ -1675,8 +1669,8 @@ class TestPipelineWiringH2H3H4H5:
 
     def test_recursive_prover_receives_all_components(self):
         """_run_recursive_prover passes leanifier, nl_prover, detailer, breakdown, corrector."""
-        from unittest.mock import patch, MagicMock
-        from agentic_research.models.proof import LemmaTree, ProofNode, RecursiveProofResult
+        from unittest.mock import patch
+        from agentic_research.models.proof import LemmaTree, ProofNode
         from agentic_research.agents.recursive_prover import RecursiveProver
 
         pipeline = _make_pipeline()

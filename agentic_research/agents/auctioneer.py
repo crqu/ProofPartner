@@ -146,6 +146,7 @@ class Auctioneer(BaseAgent):
             for lem in context.metadata.get("lemmas", [])
         ]
         prior_definitions = context.metadata.get("prior_definitions", "")
+        iteration_context = context.metadata.get("iteration_context")
 
         log.info(
             "auctioneer_start",
@@ -155,7 +156,8 @@ class Auctioneer(BaseAgent):
         )
 
         all_candidates = self._run_parallel_formalizers(
-            type_candidate, lemmas, prior_definitions
+            type_candidate, lemmas, prior_definitions,
+            iteration_context=iteration_context,
         )
 
         auction_result = self._evaluate(type_candidate.name, all_candidates)
@@ -177,6 +179,7 @@ class Auctioneer(BaseAgent):
                 prior_definitions,
                 k_override=self._k_extra,
                 id_offset=len(all_candidates),
+                iteration_context=iteration_context,
             )
             all_candidates = all_candidates + extra_candidates
             auction_result = self._evaluate(type_candidate.name, all_candidates)
@@ -216,6 +219,7 @@ class Auctioneer(BaseAgent):
         *,
         k_override: int | None = None,
         id_offset: int = 0,
+        iteration_context: str | None = None,
     ) -> list[TypeFormalizationCandidate]:
         """Run k type formalizers in parallel using asyncio."""
         k = k_override if k_override is not None else self._k
@@ -228,12 +232,14 @@ class Auctioneer(BaseAgent):
             return self._run_sequential(
                 type_candidate, lemmas, prior_definitions,
                 k=k, id_offset=id_offset,
+                iteration_context=iteration_context,
             )
 
         return asyncio.run(
             self._run_async(
                 type_candidate, lemmas, prior_definitions,
                 k=k, id_offset=id_offset,
+                iteration_context=iteration_context,
             )
         )
 
@@ -245,6 +251,7 @@ class Auctioneer(BaseAgent):
         *,
         k: int | None = None,
         id_offset: int = 0,
+        iteration_context: str | None = None,
     ) -> list[TypeFormalizationCandidate]:
         count = k if k is not None else self._k
         loop = asyncio.get_event_loop()
@@ -259,6 +266,7 @@ class Auctioneer(BaseAgent):
                     lemmas,
                     prior_definitions,
                     cid,
+                    iteration_context,
                 )
             )
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -285,6 +293,7 @@ class Auctioneer(BaseAgent):
         *,
         k: int | None = None,
         id_offset: int = 0,
+        iteration_context: str | None = None,
     ) -> list[TypeFormalizationCandidate]:
         """Fallback when already inside an event loop."""
         count = k if k is not None else self._k
@@ -293,7 +302,8 @@ class Auctioneer(BaseAgent):
             cid = id_offset + i
             try:
                 candidate = self._run_single_formalizer(
-                    type_candidate, lemmas, prior_definitions, cid
+                    type_candidate, lemmas, prior_definitions, cid,
+                    iteration_context=iteration_context,
                 )
                 candidates.append(candidate)
             except Exception as exc:
@@ -311,6 +321,7 @@ class Auctioneer(BaseAgent):
         lemmas: list[LemmaStatement],
         prior_definitions: str,
         candidate_id: int,
+        iteration_context: str | None = None,
     ) -> TypeFormalizationCandidate:
         formalizer = TypeFormalizer(
             llm_client=self._llm,
@@ -318,6 +329,7 @@ class Auctioneer(BaseAgent):
             candidate_id=candidate_id,
             prover_config=self._prover_config,
             intent_judge=self._intent_judge,
+            iteration_context=iteration_context,
         )
 
         ctx = AgentContext(
@@ -337,6 +349,26 @@ class Auctioneer(BaseAgent):
             candidate_id=candidate_id,
             type_name=type_candidate.name,
             compiles=False,
+        )
+
+    @staticmethod
+    def build_failure_feedback(auction_result: AuctionResult) -> str:
+        """Summarize which auxiliary lemmas failed and their errors."""
+        if not auction_result.winning_candidate:
+            return ""
+        lines: list[str] = []
+        for aux in auction_result.winning_candidate.auxiliary_lemmas:
+            if not aux.proved:
+                error = aux.error_message or "unknown error"
+                lines.append(
+                    f"- Lemma '{aux.lemma.name}' for type '{aux.lemma.for_type}' "
+                    f"FAILED: {error}"
+                )
+        if not lines:
+            return ""
+        return (
+            "The following auxiliary lemmas failed in the previous iteration:\n"
+            + "\n".join(lines)
         )
 
     def _force_accept_best(

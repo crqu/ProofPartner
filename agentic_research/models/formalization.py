@@ -163,6 +163,14 @@ class AuctionResult(BaseModel):
         description="All evaluated candidates (populated for interactive steering)",
     )
     reason: str = Field(default="", description="Why this candidate won or why retry is needed")
+    refinement_iterations: int = Field(
+        default=0,
+        description="Number of refinement iterations performed",
+    )
+    proof_rate_history: list[float] = Field(
+        default_factory=list,
+        description="Proof rate at each refinement iteration",
+    )
 
 
 class TypeFormalizationResult(BaseModel):

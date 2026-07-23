@@ -86,6 +86,10 @@ class LemmaTree(BaseModel):
         default_factory=list,
         description="Node IDs in topological order (leaves first)",
     )
+    decomposition_score: float | None = Field(
+        default=None,
+        description="MVP scoring: weighted combination of brevity and structural balance",
+    )
 
     def get_node(self, node_id: str) -> ProofNode | None:
         return self.nodes.get(node_id)

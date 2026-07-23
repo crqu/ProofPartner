@@ -84,6 +84,7 @@ class ProofPipeline:
         use_intent_judge: bool = False,
         nl_prover: NaturalLanguageProver | None = None,
         use_nl_proof_stage: bool = True,
+        decomposition_k: int = 1,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self._llm = llm_client
@@ -102,6 +103,7 @@ class ProofPipeline:
         self._use_intent_judge = use_intent_judge
         self._nl_prover = nl_prover
         self._use_nl_proof_stage = use_nl_proof_stage
+        self._decomposition_k = decomposition_k
         self._progress_callback = progress_callback
         self._total_tokens = TokenUsage()
         self._statement_nl: str = ""
@@ -573,7 +575,10 @@ class ProofPipeline:
                 issue.model_dump() for issue in critic_feedback
             ]
 
-        agent = LemmaBreakdown(llm_client=self._llm)
+        agent = LemmaBreakdown(
+            llm_client=self._llm,
+            decomposition_k=self._decomposition_k,
+        )
         ctx = AgentContext(
             task=statement_nl or lean_statement,
             metadata=metadata,

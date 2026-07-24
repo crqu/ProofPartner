@@ -211,6 +211,7 @@ class RecursiveProver(BaseAgent):
                     correction_hint = (
                         f"\n\n[Correction context]\n"
                         f"Error: {correction.error_category.value}\n"
+                        f"Reasoning: {correction.reasoning}\n"
                         f"Suggested tactics: {', '.join(correction.suggested_tactics)}\n"
                         f"Revised sketch:\n{correction.revised_proof_sketch}"
                     )
@@ -270,7 +271,7 @@ class RecursiveProver(BaseAgent):
             )
 
             if not parent_proved:
-                if attempt_errors and attempt_errors == previous_errors:
+                if attempt_errors == previous_errors and previous_proof is not None:
                     log.warning(
                         "recursive_prover_identical_errors",
                         node_id=node.node_id,
@@ -451,6 +452,8 @@ class RecursiveProver(BaseAgent):
         )
 
         if not child_decls:
+            if children:
+                return False, "", "all_children_unleanified"
             return False, "", ""
 
         child_decls = self._patch_assembly(child_decls, tree, node)
@@ -465,12 +468,25 @@ class RecursiveProver(BaseAgent):
         if nl_context:
             user_content += f"\n\n{nl_context}"
 
-        if previous_proof and previous_errors:
+        if previous_proof is not None:
+            errors_section = (
+                f"## Compilation Errors\n{previous_errors}"
+                if previous_errors
+                else "## Compilation Errors\nNo errors — compiled but did not close all goals"
+            )
             user_content += (
                 "\n\n## Previous Attempt (FAILED — do NOT repeat)\n"
                 f"```lean\n{previous_proof}\n```\n\n"
-                f"## Compilation Errors\n{previous_errors}\n\n"
+                f"{errors_section}\n\n"
                 "Fix the errors above. Try a DIFFERENT proof approach."
+            )
+
+        if node.failure_diagnosis is not None:
+            user_content += (
+                f"\n\n## Failure Diagnosis\n"
+                f"Type: {node.failure_diagnosis.failure_type.value}\n"
+                f"Analysis: {node.failure_diagnosis.description}\n"
+                f"Suggested fix: {node.failure_diagnosis.suggested_fix}\n"
             )
 
         response = self._llm.complete(

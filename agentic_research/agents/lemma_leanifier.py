@@ -277,6 +277,7 @@ class LemmaLeanifier(BaseAgent):
         if compilation.compilation_status == CompilationStatus.OK:
             return lean_code, total_tokens
 
+        previous_lean_code: str | None = None
         for retry in range(1, self._max_compile_retries + 1):
             log.info("lemma_leanify_retry", node_id=node.node_id, retry=retry)
             errors = "\n".join(compilation.errors) if compilation.errors else "Unknown error"
@@ -289,16 +290,23 @@ class LemmaLeanifier(BaseAgent):
             )
             feedback_content += self._definitions_context()
 
+            temperature = 0.0 if retry == 1 else 0.3
             response = self._llm.complete(
                 system=LEMMA_LEANIFY_SYSTEM,
                 messages=[{"role": "user", "content": feedback_content}],
-                temperature=0.0,
+                temperature=temperature,
                 use_cache=True,
             )
             total_tokens.input_tokens += response.token_usage.input_tokens
             total_tokens.output_tokens += response.token_usage.output_tokens
 
+            previous_lean_code = lean_code
             lean_code = _extract_lean_code(response.content)
+
+            if lean_code == previous_lean_code:
+                log.warning("lemma_leanify_identical_retry", node_id=node.node_id, retry=retry)
+                break
+
             compilation = self._compile(lean_code)
 
             if compilation.compilation_status == CompilationStatus.OK:

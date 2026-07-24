@@ -71,6 +71,9 @@ class BaseAgent(ABC):
         last_error: str | None = None
 
         for attempt in range(1, self._max_retries + 1):
+            if attempt > 1:
+                context.metadata["retry_attempt"] = attempt
+                context.metadata["last_error"] = last_error
             log.info("agent_attempt", agent=self._name, attempt=attempt)
             try:
                 result = self._execute(context)

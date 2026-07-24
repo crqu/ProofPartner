@@ -939,7 +939,7 @@ class ProofPipeline:
         if recursive_result.proved and recursive_result.lemma_tree:
             self._notify_progress("Finalization", "Assembling final proof")
             final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
-            if final_proof:
+            if final_proof is not None:
                 if self._use_claim_check:
                     passed = self._run_claim_check(lean_statement, final_proof)
                     if not passed:
@@ -1010,7 +1010,7 @@ class ProofPipeline:
             if recursive_result.proved and recursive_result.lemma_tree:
                 self._notify_progress("Finalization", "Assembling final proof")
                 final_proof = self._run_flatten_finalize(recursive_result.lemma_tree)
-                if final_proof:
+                if final_proof is not None:
                     if self._use_claim_check:
                         passed = self._run_claim_check(lean_statement, final_proof)
                         if not passed:

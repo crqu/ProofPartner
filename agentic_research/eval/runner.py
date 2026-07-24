@@ -5,6 +5,7 @@ Run via: python -m agentic_research.eval.runner
 
 from __future__ import annotations
 
+import copy
 import random
 import threading
 import time
@@ -271,7 +272,10 @@ def run_eval(config: EvalConfig) -> ScoreReport:
 
         best_result: ProblemResult | None = None
         for attempt in range(config.pass_k):
-            result = evaluate_fn(problem, config, shared)
+            attempt_config = copy.copy(config)
+            if attempt_config.seed is not None:
+                attempt_config.seed = config.seed + attempt
+            result = evaluate_fn(problem, attempt_config, shared)
             if best_result is None or result.result == ProofResult.SUCCESS:
                 best_result = result
             if result.result == ProofResult.SUCCESS:

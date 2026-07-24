@@ -67,7 +67,7 @@ class NaturalLanguageProver(BaseAgent):
     ) -> tuple[NLProofSketch, TokenUsage]:
         """Generate an informal proof sketch for the given statement."""
         feedback_str = ""
-        if feedback and feedback.issues:
+        if feedback is not None and feedback.issues:
             lines = []
             for issue in feedback.issues:
                 lines.append(
@@ -97,7 +97,7 @@ class NaturalLanguageProver(BaseAgent):
             )
 
         feedback_section = ""
-        if feedback:
+        if feedback is not None and feedback != "":
             feedback_section = (
                 "## Critic Feedback (address these issues)\n"
                 f"{feedback}"

@@ -69,6 +69,15 @@ class ResilientRepl:
 
             last_result = result
             self._health_failures += 1
+
+            if result.status == ToolStatus.ERROR:
+                err_msg = (result.error_message or "").lower()
+                is_transient = any(
+                    kw in err_msg
+                    for kw in ("process", "timeout", "connection", "transient", "crash")
+                )
+                if not is_transient:
+                    return result
             if self._health_failures >= 3:
                 self._unavailable = True
                 log.warning(

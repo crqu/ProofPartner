@@ -68,7 +68,6 @@ class ResilientRepl:
                 return result
 
             last_result = result
-            self._health_failures += 1
 
             if result.status == ToolStatus.ERROR:
                 err_msg = (result.error_message or "").lower()
@@ -78,6 +77,8 @@ class ResilientRepl:
                 )
                 if not is_transient:
                     return result
+
+            self._health_failures += 1
             if self._health_failures >= 3:
                 self._unavailable = True
                 log.warning(

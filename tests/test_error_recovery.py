@@ -550,7 +550,7 @@ class TestGracefulDegradation:
 
         error_result = CompilationResult(
             status=ToolStatus.ERROR,
-            error_message="err",
+            error_message="process crashed unexpectedly",
         )
         repl.execute = lambda code: error_result
         resilient.execute_with_backoff("fail1")

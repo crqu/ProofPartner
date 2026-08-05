@@ -302,7 +302,7 @@ class TestProofCorrectorAgent:
 
         assert result.status == AgentStatus.SUCCESS
         correction = ProofCorrection.model_validate(result.result)
-        assert correction.error_category == ErrorCategory.UNKNOWN_IDENTIFIER
+        assert correction.error_category == ErrorCategory.MISSING_IMPORT
 
 
 # ---------------------------------------------------------------------------

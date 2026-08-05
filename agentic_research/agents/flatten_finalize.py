@@ -37,10 +37,12 @@ class FlattenFinalize(BaseAgent):
         self,
         llm_client: LLMClient,
         lean_repl: LeanRepl,
+        lean_preamble: str | None = None,
     ) -> None:
         super().__init__(name="flatten_finalize", max_retries=2)
         self._llm = llm_client
         self._repl = lean_repl
+        self._lean_preamble = lean_preamble
 
     def _execute(self, context: AgentContext) -> AgentResult:
         tree_data = context.metadata.get("lemma_tree")
@@ -68,11 +70,20 @@ class FlattenFinalize(BaseAgent):
         proved_lemmas = self._collect_proved_lemmas(tree)
         root_proof = root.proof_code or ""
 
+        preamble_section = ""
+        if self._lean_preamble:
+            preamble_section = (
+                "\n## Available Imports & Definitions\n"
+                "```lean\n" + self._lean_preamble + "\n```\n"
+            )
+
         user_content = FLATTEN_PROOF_TEMPLATE.format(
             root_statement=root.statement_lean,
             proved_lemmas=proved_lemmas,
             root_proof=root_proof,
         )
+        if preamble_section:
+            user_content = preamble_section + "\n" + user_content
 
         response = self._llm.complete(
             system="You are an expert Lean 4 programmer. Assemble proofs into a single file.",
@@ -82,7 +93,8 @@ class FlattenFinalize(BaseAgent):
         )
 
         assembled_code = _extract_lean_code(response.content)
-        compilation = self._repl.execute(assembled_code)
+        compile_code = (self._lean_preamble + "\n\n" + assembled_code) if self._lean_preamble else assembled_code
+        compilation = self._repl.execute(compile_code)
 
         uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
         if compilation.compilation_status == CompilationStatus.OK and compilation.all_goals_closed and not uses_sorry:

@@ -143,7 +143,8 @@ class IterativeProver(BaseAgent):
                 continue
 
             proof_code = _extract_lean_code(llm_response.content)
-            compilation = self._repl.execute(proof_code)
+            compile_code = (self._lean_preamble + "\n\n" + proof_code) if self._lean_preamble else proof_code
+            compilation = self._repl.execute(compile_code)
 
             uses_sorry = any('sorry' in w for w in (compilation.warnings or []))
             if compilation.compilation_status == CompilationStatus.OK and compilation.all_goals_closed and not uses_sorry:

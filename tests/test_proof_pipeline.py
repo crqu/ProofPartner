@@ -245,8 +245,8 @@ class TestProofCorrectorCompilerFeedback:
         from agentic_research.agents.proof_corrector import ProofCorrector
 
         response = json.dumps({
-            "error_category": "unknown_identifier",
-            "error_message": "unknown identifier 'foo'",
+            "error_category": "type_mismatch",
+            "error_message": "type mismatch in foo",
             "suggested_tactics": ["exact bar"],
             "revised_proof_sketch": "by exact bar",
             "confidence": 0.6,
@@ -259,9 +259,9 @@ class TestProofCorrectorCompilerFeedback:
             task="correct proof",
             metadata={
                 "failed_proof": "by exact foo",
-                "error_message": "unknown identifier 'foo'",
+                "error_message": "type mismatch in foo",
                 "lean_goal_state": "⊢ Nat",
-                "compiler_errors": ["unknown identifier 'foo'"],
+                "compiler_errors": ["type mismatch in foo"],
             },
         )
         result = corrector.run(ctx)
@@ -620,32 +620,19 @@ class TestLemmaLeanifierPreamble:
         assert "Available Definitions" not in prompt_content
 
 
-class TestProofPipelineDRODetection:
-    """Verify ProofPipeline auto-detects DRO keywords and passes preamble."""
+class TestProofPipelinePreambleDetection:
+    """Verify ProofPipeline detects preamble based on Lake project availability."""
 
-    def test_dro_keywords_trigger_preamble(self):
+    def test_lake_project_triggers_preamble(self):
+        from unittest.mock import patch
+
         pipeline = _make_pipeline()
-        preamble = pipeline._detect_lean_preamble(
-            "The Wasserstein distance between two probability measures"
-        )
+        with patch.object(pipeline._repl, "has_lake_project", return_value=True):
+            preamble = pipeline._detect_lean_preamble("any statement")
         assert preamble is not None
-        assert "wassersteinDist" in preamble
+        assert "import Mathlib" in preamble
 
-    def test_coupling_keyword_triggers_preamble(self):
-        pipeline = _make_pipeline()
-        preamble = pipeline._detect_lean_preamble(
-            "For any coupling of mu and nu"
-        )
-        assert preamble is not None
-
-    def test_distributionally_robust_triggers_preamble(self):
-        pipeline = _make_pipeline()
-        preamble = pipeline._detect_lean_preamble(
-            "In the distributionally robust optimization setting"
-        )
-        assert preamble is not None
-
-    def test_non_dro_statement_no_preamble(self):
+    def test_no_lake_project_no_preamble(self):
         pipeline = _make_pipeline()
         preamble = pipeline._detect_lean_preamble(
             "For all natural numbers n, n + 0 = n"
@@ -662,14 +649,16 @@ class TestProofPipelineDRODetection:
 
         pipeline = _make_pipeline()
 
-        with patch.object(pipeline._repl, "try_automated_tactics", return_value="trivial"):
+        with patch.object(pipeline._repl, "has_lake_project", return_value=True), \
+             patch.object(pipeline._repl, "try_automated_tactics", return_value="trivial"):
             pipeline.run(
                 "theorem foo : True",
-                statement_nl="The Wasserstein ball has bounded diameter",
+                statement_nl="Some theorem about natural numbers",
             )
 
-        assert pipeline._statement_nl == "The Wasserstein ball has bounded diameter"
+        assert pipeline._statement_nl == "Some theorem about natural numbers"
         assert pipeline._lean_preamble is not None
+        assert "import Mathlib" in pipeline._lean_preamble
 
 
 # ---------------------------------------------------------------------------

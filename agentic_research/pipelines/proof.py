@@ -131,26 +131,17 @@ class ProofPipeline:
 
     _MAX_BACKTRACK_ATTEMPTS = 2
 
-    _DRO_KEYWORDS = frozenset([
-        "wasserstein", "coupling", "distributionally robust",
-        "probability measure", "transport cost",
-    ])
+    _STANDARD_MATHLIB_PREAMBLE = (
+        "import Mathlib\n"
+        "import Aesop\n"
+        "set_option maxHeartbeats 400000\n"
+        "open BigOperators Real Nat Topology Rat"
+    )
 
     def _detect_lean_preamble(self, statement_nl: str) -> str | None:
-        """Return the DRO data-package preamble if NL statement matches keywords.
-
-        Also loads pre-built axioms and keywords if available.
-        """
-        lower = statement_nl.lower()
-        if any(kw in lower for kw in self._DRO_KEYWORDS):
-            from agentic_research.data_packages import get_package
-            pkg = get_package("dro_coupling")
-            if pkg is not None:
-                if hasattr(pkg, "provided_axioms"):
-                    self._prebuilt_axioms = pkg.provided_axioms()
-                if hasattr(pkg, "axiom_keywords"):
-                    self._axiom_keywords = pkg.axiom_keywords()
-                return pkg.lean_preamble()
+        """Return standard Mathlib preamble if a Lake project is available."""
+        if self._repl.has_lake_project():
+            return self._STANDARD_MATHLIB_PREAMBLE
         return None
 
     def run(self, lean_statement: str, statement_nl: str = "") -> ProofPipelineResult:
@@ -170,7 +161,14 @@ class ProofPipeline:
             log.info("external_prover_fallback_to_builtin")
 
         tactic_start = time.monotonic()
-        tactic = self._repl.try_automated_tactics(lean_statement)
+        preamble_imports: list[str] | None = None
+        if self._lean_preamble:
+            preamble_imports = [
+                line.split()[1]
+                for line in self._lean_preamble.splitlines()
+                if line.strip().startswith("import ")
+            ] or None
+        tactic = self._repl.try_automated_tactics(lean_statement, imports=preamble_imports)
         if tactic is not None:
             tactic_elapsed = time.monotonic() - tactic_start
             proof_code = f"{lean_statement} by {tactic}"
@@ -1235,7 +1233,7 @@ class ProofPipeline:
         )
 
     def _run_flatten_finalize(self, tree: LemmaTree) -> str | None:
-        agent = FlattenFinalize(llm_client=self._llm, lean_repl=self._repl)
+        agent = FlattenFinalize(llm_client=self._llm, lean_repl=self._repl, lean_preamble=self._lean_preamble)
         ctx = AgentContext(
             task="flatten proof",
             metadata={"lemma_tree": tree.model_dump()},
@@ -1248,16 +1246,22 @@ class ProofPipeline:
 
     @staticmethod
     def _extract_compiler_errors(search_result: ProofSearchResult) -> list[str]:
-        """Extract structured compiler error strings from a failed proof search."""
+        """Extract actual REPL compiler errors from proof search attempts."""
         errors: list[str] = []
         if search_result.failure_reason:
             errors.append(search_result.failure_reason)
         for strategy in search_result.strategies_tried:
-            tactic_desc = ", ".join(strategy.key_tactics) if strategy.key_tactics else "none"
-            errors.append(
-                f"Strategy '{strategy.strategy_type.value}' failed "
-                f"(tactics: [{tactic_desc}]): {strategy.description}"
-            )
+            prover_result = getattr(strategy, "prover_result", None)
+            if prover_result and hasattr(prover_result, "attempts"):
+                for attempt in prover_result.attempts:
+                    if hasattr(attempt, "errors") and attempt.errors:
+                        errors.extend(attempt.errors)
+            else:
+                tactic_desc = ", ".join(strategy.key_tactics) if strategy.key_tactics else "none"
+                errors.append(
+                    f"Strategy '{strategy.strategy_type.value}' failed "
+                    f"(tactics: [{tactic_desc}]): {strategy.description}"
+                )
         return errors
 
     def _try_proof_correction(
@@ -1285,11 +1289,20 @@ class ProofPipeline:
             error_count=len(compiler_errors),
         )
 
+        prior_attempts: list[str] = []
+        for strategy in search_result.strategies_tried:
+            prover_result = getattr(strategy, "prover_result", None)
+            if prover_result and hasattr(prover_result, "attempts"):
+                for attempt in prover_result.attempts:
+                    if hasattr(attempt, "proof_code") and attempt.proof_code:
+                        prior_attempts.append(attempt.proof_code)
+
         corrector = ProofCorrector(llm_client=self._llm)
         correction = corrector.correct(
             failed_proof=last_proof,
             error_message=error_msg,
             lean_goal_state=statement,
+            prior_attempts=prior_attempts if prior_attempts else None,
             compiler_errors=compiler_errors if compiler_errors else None,
         )
         self._accumulate_tokens(corrector.cumulative_tokens)

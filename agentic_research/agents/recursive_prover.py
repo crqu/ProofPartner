@@ -54,6 +54,21 @@ log = get_logger(__name__)
 DEFAULT_MAX_DEPTH = 5
 DEFAULT_MAX_RETRIES_PER_NODE = 3
 
+_SET_BUILDER_RE = re.compile(
+    r"\{[^{}]*(?::[^{}]*\||\|)[^{}]*\}"
+)
+
+
+def _count_lean_brace_imbalance(text: str) -> int:
+    """Count brace imbalance skipping set-builder notation and set literals.
+
+    Set-builder forms like ``{x : T | P x}`` and set literals ``{1, 2}``
+    are balanced in Lean — their braces should not count toward the
+    structural brace imbalance that ``_patch_assembly`` tries to fix.
+    """
+    cleaned = _SET_BUILDER_RE.sub("", text)
+    return cleaned.count("{") - cleaned.count("}")
+
 
 def _extract_lean_code(text: str) -> str:
     match = re.search(r"```lean\s*\n(.*?)```", text, re.DOTALL)
@@ -180,8 +195,18 @@ class RecursiveProver(BaseAgent):
             llm_client=self._llm,
             lean_repl=self._repl,
             config=self._prover_config,
+            lean_preamble=self._lean_preamble,
         )
-        ctx = AgentContext(task=node.statement_lean)
+
+        task_parts = [node.statement_lean]
+        if node.proof_sketch_nl:
+            task_parts.append(f"\n[NL proof sketch]: {node.proof_sketch_nl}")
+
+        sibling_context = self._get_sibling_context(tree, node)
+        if sibling_context:
+            task_parts.append(f"\n[Sibling lemmas]:\n{sibling_context}")
+
+        ctx = AgentContext(task="".join(task_parts))
         result = prover.run(ctx)
 
         tokens.input_tokens += result.token_usage.input_tokens
@@ -367,7 +392,15 @@ class RecursiveProver(BaseAgent):
             stmt = f"axiom {name}{sig}"
         else:
             stmt = f"axiom {name} : {stmt}"
-        return f"{stmt}\n-- Use: have <result> := {name} <args>"
+
+        result = f"{stmt}\n-- Use: have <result> := {name} <args>"
+        if child.statement_nl:
+            result += f"\n-- NL: {child.statement_nl}"
+        if child.proof_sketch_nl:
+            sketch_oneline = child.proof_sketch_nl.split("\n")[0].strip()
+            if sketch_oneline:
+                result += f"\n-- Sketch: {sketch_oneline}"
+        return result
 
     _PATCH_ASSEMBLY_MAX_ITERATIONS = 3
 
@@ -380,7 +413,8 @@ class RecursiveProver(BaseAgent):
         applies targeted string repairs (re-strip preamble, fix brackets).
         Returns corrected child_decls or original if unfixable.
         """
-        sentinel = child_decls + "\n-- sentinel"
+        preamble_prefix = (self._lean_preamble + "\n\n") if self._lean_preamble else ""
+        sentinel = preamble_prefix + child_decls + "\n-- sentinel"
         compilation = self._repl.execute(sentinel)
         if compilation.compilation_status == CompilationStatus.OK:
             return child_decls
@@ -405,7 +439,7 @@ class RecursiveProver(BaseAgent):
             open_brackets = child_decls.count("[") - child_decls.count("]")
             if open_brackets > 0:
                 child_decls += "]" * open_brackets
-            open_braces = child_decls.count("{") - child_decls.count("}")
+            open_braces = _count_lean_brace_imbalance(child_decls)
             if open_braces > 0:
                 child_decls += "}" * open_braces
 
@@ -413,7 +447,7 @@ class RecursiveProver(BaseAgent):
                 r"\b(axiom|theorem|lemma)\s+\1\b", r"\1", child_decls
             )
 
-            sentinel = child_decls + "\n-- sentinel"
+            sentinel = preamble_prefix + child_decls + "\n-- sentinel"
             compilation = self._repl.execute(sentinel)
             if compilation.compilation_status == CompilationStatus.OK:
                 log.info(
@@ -460,9 +494,18 @@ class RecursiveProver(BaseAgent):
         if not child_decls:
             return False, "", "assembly_unfixable"
 
+        preamble_section = ""
+        if self._lean_preamble:
+            preamble_section = (
+                "\n## Available Imports & Definitions\n"
+                "The following imports and definitions are available in scope:\n"
+                f"```lean\n{self._lean_preamble}\n```\n"
+            )
+
         user_content = PARENT_PROOF_USER_TEMPLATE.format(
             parent_statement=node.statement_lean,
             child_declarations=child_decls,
+            lean_preamble_section=preamble_section,
         )
 
         if nl_context:
@@ -665,6 +708,23 @@ class RecursiveProver(BaseAgent):
             if sibling and sibling.statement_lean:
                 parts.append(f"-- {cid}\n{sibling.statement_lean}")
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _get_sibling_context(tree: LemmaTree, node: ProofNode) -> str:
+        """Get sibling node IDs and NL statements for leaf context."""
+        if not node.parent_id:
+            return ""
+        parent = tree.get_node(node.parent_id)
+        if not parent:
+            return ""
+        parts = []
+        for cid in parent.children:
+            if cid == node.node_id:
+                continue
+            sibling = tree.get_node(cid)
+            if sibling and sibling.statement_nl:
+                parts.append(f"- {cid}: {sibling.statement_nl}")
+        return "\n".join(parts)
 
     def _generate_nl_context(
         self, node: ProofNode, tokens: TokenUsage

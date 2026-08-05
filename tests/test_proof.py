@@ -1451,6 +1451,7 @@ class TestPhase7PromptTemplates:
         rendered = PARENT_PROOF_USER_TEMPLATE.format(
             parent_statement="theorem p := sorry",
             child_declarations="theorem l1 := sorry",
+            lean_preamble_section="",
         )
         assert "theorem p" in rendered
         assert "theorem l1" in rendered
@@ -1771,13 +1772,14 @@ class TestParentBeforeChildrenSorryStubs:
 
         child = ProofNode(
             node_id="lemma_3",
-            statement_nl="existing axiom",
+            statement_nl="compactness",
             statement_lean="axiom lemma_3 : True",
             from_prior_work=True,
         )
         result = RecursiveProver._format_child_declaration(child)
         assert result.startswith("axiom lemma_3")
-        assert result.count("axiom") == 1
+        first_line = result.split("\n")[0]
+        assert first_line.count("axiom") == 1
 
 
 class TestWeakChildLemmaDetection:

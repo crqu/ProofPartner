@@ -74,6 +74,7 @@ class ProofAttemptStatus(str, Enum):
     INCOMPLETE = "incomplete"
     TIMEOUT = "timeout"
     ERROR = "error"
+    TRUNCATED = "truncated"
 
 
 class ProofAttempt(BaseModel):

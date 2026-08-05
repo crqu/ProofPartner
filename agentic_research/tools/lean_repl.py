@@ -91,16 +91,49 @@ def require_backend(allow_mock: bool = False) -> ReplBackend:
     return backend
 
 
+_ERROR_HEADER_RE = re.compile(r"(?:^|\S+:\d+:\d+:\s*)error\b", re.IGNORECASE)
+_WARNING_HEADER_RE = re.compile(r"(?:^|\S+:\d+:\d+:\s*)warning\b", re.IGNORECASE)
+
+
 def _parse_lean_errors(output: str) -> tuple[list[str], list[str]]:
-    """Extract error and warning messages from Lean compiler output."""
+    """Extract error and warning messages from Lean compiler output.
+
+    Accumulates multi-line error/warning blocks: when a header line is found,
+    subsequent indented or continuation lines are appended until the next
+    header or blank line.
+    """
     errors: list[str] = []
     warnings: list[str] = []
+    current_lines: list[str] = []
+    current_kind: str | None = None
+
+    def _flush() -> None:
+        if current_kind and current_lines:
+            block = "\n".join(current_lines)
+            if current_kind == "error":
+                errors.append(block)
+            else:
+                warnings.append(block)
+
     for line in output.splitlines():
         stripped = line.strip()
-        if " error:" in line or stripped.startswith("error"):
-            errors.append(stripped)
-        elif " warning:" in line or stripped.startswith("warning"):
-            warnings.append(stripped)
+
+        is_error = bool(_ERROR_HEADER_RE.search(line))
+        is_warning = bool(_WARNING_HEADER_RE.search(line))
+
+        if is_error or is_warning:
+            _flush()
+            current_lines = [stripped]
+            current_kind = "error" if is_error else "warning"
+        elif current_kind is not None:
+            if not stripped:
+                _flush()
+                current_lines = []
+                current_kind = None
+            else:
+                current_lines.append(stripped)
+
+    _flush()
     return errors, warnings
 
 

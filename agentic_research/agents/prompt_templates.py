@@ -1535,7 +1535,7 @@ PARENT_PROOF_USER_TEMPLATE = """\
 
 ## Child Lemma Declarations (assume these are true)
 {child_declarations}
-
+{lean_preamble_section}
 Prove the parent theorem using these child lemmas as premises. \
 Return inside a ```lean code block.
 """

@@ -64,7 +64,13 @@ class IterativeProver(BaseAgent):
 
     def _execute(self, context: AgentContext) -> AgentResult:
         statement = context.task
-        prover_result = self._prove(statement)
+
+        strategy_meta = {}
+        for key in ("strategy_type", "strategy_description", "key_tactics", "relevant_lemmas"):
+            if key in context.metadata:
+                strategy_meta[key] = context.metadata[key]
+
+        prover_result = self._prove(statement, strategy_metadata=strategy_meta or None)
 
         status = AgentStatus.SUCCESS if prover_result.proved else AgentStatus.FAILURE
         return AgentResult(
@@ -75,12 +81,20 @@ class IterativeProver(BaseAgent):
             error_message=prover_result.failure_reason,
         )
 
-    def _prove(self, statement: str) -> ProverResult:
+    _MAX_TOKENS_CAP = 32768
+    _TRUNCATION_MULTIPLIER = 1.5
+
+    def _prove(
+        self,
+        statement: str,
+        strategy_metadata: dict | None = None,
+    ) -> ProverResult:
         attempts: list[ProofAttempt] = []
         total_tokens = TokenUsage()
         previous_code: str | None = None
         previous_errors: str = ""
         previous_goals: str = ""
+        current_max_tokens: int = self._config.max_tokens
 
         for iteration in range(1, self._config.max_iterations + 1):
             log.info("prover_iteration", iteration=iteration, max=self._config.max_iterations)
@@ -90,12 +104,43 @@ class IterativeProver(BaseAgent):
                 previous_attempt=previous_code,
                 errors=previous_errors,
                 goals=previous_goals,
+                strategy_metadata=strategy_metadata,
+                max_tokens_override=current_max_tokens if current_max_tokens != self._config.max_tokens else None,
             )
 
             total_tokens.input_tokens += llm_response.token_usage.input_tokens
             total_tokens.output_tokens += llm_response.token_usage.output_tokens
             total_tokens.cache_creation_input_tokens += llm_response.token_usage.cache_creation_input_tokens
             total_tokens.cache_read_input_tokens += llm_response.token_usage.cache_read_input_tokens
+
+            if llm_response.stop_reason == "max_tokens":
+                new_limit = min(
+                    int(current_max_tokens * self._TRUNCATION_MULTIPLIER),
+                    self._MAX_TOKENS_CAP,
+                )
+                log.warning(
+                    "prover_truncated",
+                    iteration=iteration,
+                    old_max_tokens=current_max_tokens,
+                    new_max_tokens=new_limit,
+                )
+                attempt = ProofAttempt(
+                    iteration=iteration,
+                    proof_code=_extract_lean_code(llm_response.content),
+                    status=ProofAttemptStatus.TRUNCATED,
+                    token_usage=llm_response.token_usage,
+                )
+                attempts.append(attempt)
+                if new_limit > current_max_tokens:
+                    current_max_tokens = new_limit
+                    previous_code = None
+                    previous_errors = ""
+                    previous_goals = ""
+                    continue
+                previous_code = attempt.proof_code
+                previous_errors = "Output was truncated due to max_tokens limit."
+                previous_goals = "None"
+                continue
 
             proof_code = _extract_lean_code(llm_response.content)
             compilation = self._repl.execute(proof_code)
@@ -165,6 +210,8 @@ class IterativeProver(BaseAgent):
         previous_attempt: str | None,
         errors: str,
         goals: str,
+        strategy_metadata: dict | None = None,
+        max_tokens_override: int | None = None,
     ) -> "LLMResponse":
         full_statement = (
             f"{self._lean_preamble}\n\n{statement}"
@@ -182,10 +229,30 @@ class IterativeProver(BaseAgent):
                 goals=goals,
             )
 
+        if strategy_metadata:
+            strategy_section = "\n## Strategy\n"
+            if strategy_metadata.get("strategy_type"):
+                strategy_section += f"Type: {strategy_metadata['strategy_type']}\n"
+            if strategy_metadata.get("strategy_description"):
+                strategy_section += f"Description: {strategy_metadata['strategy_description']}\n"
+            if strategy_metadata.get("key_tactics"):
+                tactics = strategy_metadata["key_tactics"]
+                if isinstance(tactics, list):
+                    tactics = ", ".join(tactics)
+                strategy_section += f"Key tactics: {tactics}\n"
+            if strategy_metadata.get("relevant_lemmas"):
+                lemmas = strategy_metadata["relevant_lemmas"]
+                if isinstance(lemmas, list):
+                    lemmas = ", ".join(lemmas)
+                strategy_section += f"Relevant lemmas: {lemmas}\n"
+            user_content += strategy_section
+
+        effective_max_tokens = max_tokens_override or self._config.max_tokens
+
         return self._llm.complete(
             system=LEAN4_PROVER_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
-            max_tokens=self._config.max_tokens,
+            max_tokens=effective_max_tokens,
             temperature=self._config.temperature,
             use_extended_thinking=self._config.use_extended_thinking,
             use_cache=True,

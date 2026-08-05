@@ -452,11 +452,13 @@ class TestExtractCompilerErrorsReturnsReplErrors:
         )
 
         errors = ProofPipeline._extract_compiler_errors(result)
-        assert "All strategies exhausted" in errors[0]
         assert "unknown identifier 'LE'" in errors
         assert "failed to synthesize instance" in errors
+        # Strategy summaries should NOT be included
+        for err in errors:
+            assert "strategies exhausted" not in err.lower()
 
-    def test_falls_back_to_strategy_description(self):
+    def test_no_prover_result_yields_empty(self):
         from agentic_research.pipelines.proof import ProofPipeline
 
         result = ProofSearchResult(
@@ -472,8 +474,7 @@ class TestExtractCompilerErrorsReturnsReplErrors:
         )
 
         errors = ProofPipeline._extract_compiler_errors(result)
-        assert len(errors) == 1
-        assert "direct" in errors[0].lower()
+        assert errors == []
 
 
 class TestDiagnoseFailureUsesRealErrors:

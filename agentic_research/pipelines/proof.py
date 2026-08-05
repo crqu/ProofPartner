@@ -79,7 +79,7 @@ class ProofPipeline:
         use_external_prover: bool = False,
         external_prover_config: ExternalProverConfig | None = None,
         use_proof_critic: bool = True,
-        max_critic_retries: int = 0,
+        max_critic_retries: int = 1,
         use_proof_detailer: bool = True,
         use_intent_judge: bool = False,
         nl_prover: NaturalLanguageProver | None = None,
@@ -1246,22 +1246,18 @@ class ProofPipeline:
 
     @staticmethod
     def _extract_compiler_errors(search_result: ProofSearchResult) -> list[str]:
-        """Extract actual REPL compiler errors from proof search attempts."""
+        """Extract actual REPL compiler errors from proof search attempts.
+
+        Only collects errors from ProverResult.attempts, skipping strategy-level
+        summaries that would confuse the ProofCorrector.
+        """
         errors: list[str] = []
-        if search_result.failure_reason:
-            errors.append(search_result.failure_reason)
         for strategy in search_result.strategies_tried:
             prover_result = getattr(strategy, "prover_result", None)
             if prover_result and hasattr(prover_result, "attempts"):
                 for attempt in prover_result.attempts:
                     if hasattr(attempt, "errors") and attempt.errors:
                         errors.extend(attempt.errors)
-            else:
-                tactic_desc = ", ".join(strategy.key_tactics) if strategy.key_tactics else "none"
-                errors.append(
-                    f"Strategy '{strategy.strategy_type.value}' failed "
-                    f"(tactics: [{tactic_desc}]): {strategy.description}"
-                )
         return errors
 
     def _try_proof_correction(

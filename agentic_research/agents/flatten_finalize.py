@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 
 from agentic_research.agents.base import BaseAgent
+from agentic_research.agents.lean_utils import _strip_preamble_lines
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import FLATTEN_PROOF_TEMPLATE
 from agentic_research.logging import get_logger
@@ -93,7 +94,11 @@ class FlattenFinalize(BaseAgent):
         )
 
         assembled_code = _extract_lean_code(response.content)
-        compile_code = (self._lean_preamble + "\n\n" + assembled_code) if self._lean_preamble else assembled_code
+        if self._lean_preamble:
+            stripped = _strip_preamble_lines(assembled_code)
+            compile_code = self._lean_preamble + "\n\n" + stripped
+        else:
+            compile_code = assembled_code
         compilation = self._repl.execute(compile_code)
 
         uses_sorry = any('sorry' in w for w in (compilation.warnings or []))

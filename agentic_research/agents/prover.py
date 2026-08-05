@@ -7,9 +7,11 @@ This is the 'proposer + reviewer + memory' minimal architecture.
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from agentic_research.agents.base import BaseAgent
+from agentic_research.agents.lean_utils import _strip_preamble_lines
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
     ERROR_FEEDBACK_TEMPLATE,
@@ -95,6 +97,7 @@ class IterativeProver(BaseAgent):
         previous_errors: str = ""
         previous_goals: str = ""
         current_max_tokens: int = self._config.max_tokens
+        seen_hashes: set[str] = set()
 
         for iteration in range(1, self._config.max_iterations + 1):
             log.info("prover_iteration", iteration=iteration, max=self._config.max_iterations)
@@ -143,7 +146,18 @@ class IterativeProver(BaseAgent):
                 continue
 
             proof_code = _extract_lean_code(llm_response.content)
-            compile_code = (self._lean_preamble + "\n\n" + proof_code) if self._lean_preamble else proof_code
+            if self._lean_preamble:
+                stripped = _strip_preamble_lines(proof_code)
+                compile_code = self._lean_preamble + "\n\n" + stripped
+            else:
+                compile_code = proof_code
+
+            input_hash = hashlib.md5(compile_code.encode()).hexdigest()[:12]
+            if input_hash in seen_hashes:
+                log.warning("prover_duplicate_code", iteration=iteration, input_hash=input_hash)
+                break
+            seen_hashes.add(input_hash)
+
             compilation = self._repl.execute(compile_code)
 
             uses_sorry = any('sorry' in w for w in (compilation.warnings or []))

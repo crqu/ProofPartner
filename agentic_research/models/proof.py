@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from agentic_research.models.agents import TokenUsage
+from agentic_research.models.agents import ProverResult, TokenUsage
 
 
 class StrategyType(str, Enum):
@@ -24,6 +24,7 @@ class ProofStrategy(BaseModel):
     relevant_lemmas: list[str] = Field(default_factory=list, description="Mathlib lemmas to use")
     plausibility: float = Field(default=0.5, ge=0.0, le=1.0, description="LLM-estimated plausibility")
     key_tactics: list[str] = Field(default_factory=list, description="Primary Lean tactics to try")
+    prover_result: ProverResult | None = Field(default=None, description="Result from IterativeProver if attempted")
 
 
 class FailureType(str, Enum):

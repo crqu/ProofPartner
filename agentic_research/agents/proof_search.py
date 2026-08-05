@@ -81,6 +81,7 @@ class ProofSearchAgent(BaseAgent):
             )
 
             prover_result = self._attempt_strategy(statement, strategy)
+            strategy.prover_result = prover_result
             total_tokens.input_tokens += prover_result.total_token_usage.input_tokens
             total_tokens.output_tokens += prover_result.total_token_usage.output_tokens
 

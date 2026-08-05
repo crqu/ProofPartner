@@ -424,19 +424,6 @@ class TestExtractCompilerErrorsReturnsReplErrors:
         """When strategies have prover_result with attempts, extract REPL errors."""
         from agentic_research.pipelines.proof import ProofPipeline
 
-        strategy = ProofStrategy(
-            strategy_type=StrategyType.DIRECT,
-            description="simp failed",
-            key_tactics=["simp"],
-        )
-
-        result = ProofSearchResult(
-            statement="theorem foo : True",
-            proved=False,
-            failure_reason="All strategies exhausted",
-            strategies_tried=[strategy],
-        )
-
         mock_prover_result = ProverResult(
             statement="theorem foo : True := sorry",
             proved=False,
@@ -449,7 +436,20 @@ class TestExtractCompilerErrorsReturnsReplErrors:
                 ),
             ],
         )
-        object.__setattr__(result.strategies_tried[0], "prover_result", mock_prover_result)
+
+        strategy = ProofStrategy(
+            strategy_type=StrategyType.DIRECT,
+            description="simp failed",
+            key_tactics=["simp"],
+            prover_result=mock_prover_result,
+        )
+
+        result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            failure_reason="All strategies exhausted",
+            strategies_tried=[strategy],
+        )
 
         errors = ProofPipeline._extract_compiler_errors(result)
         assert "All strategies exhausted" in errors[0]

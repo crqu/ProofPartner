@@ -375,6 +375,12 @@ class LeanRepl(BaseTool):
     def backend(self) -> ReplBackend:
         return self._config.backend
 
+    def has_lake_project(self) -> bool:
+        """Check if a Lake project is available for Mathlib imports."""
+        if isinstance(self._backend, _SubprocessBackend):
+            return self._backend.has_lake_project()
+        return False
+
     def execute(self, code: str) -> CompilationResult:
         result = super().execute(code)
         if isinstance(result, CompilationResult):

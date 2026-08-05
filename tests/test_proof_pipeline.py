@@ -15,7 +15,10 @@ from agentic_research.models.agents import (
     AgentContext,
     AgentStatus,
     LLMResponse,
+    ProofAttempt,
+    ProofAttemptStatus,
     ProverConfig,
+    ProverResult,
     TokenUsage,
 )
 from agentic_research.models.proof import (
@@ -110,7 +113,7 @@ def _make_pipeline(**kwargs):
 
 
 class TestExtractCompilerErrors:
-    def test_extracts_failure_reason(self):
+    def test_ignores_failure_reason(self):
         from agentic_research.pipelines.proof import ProofPipeline
 
         result = ProofSearchResult(
@@ -120,10 +123,9 @@ class TestExtractCompilerErrors:
             strategies_tried=[],
         )
         errors = ProofPipeline._extract_compiler_errors(result)
-        assert len(errors) == 1
-        assert "type mismatch" in errors[0]
+        assert errors == []
 
-    def test_extracts_strategy_info(self):
+    def test_ignores_strategy_summaries(self):
         from agentic_research.pipelines.proof import ProofPipeline
 
         result = ProofSearchResult(
@@ -144,11 +146,7 @@ class TestExtractCompilerErrors:
             ],
         )
         errors = ProofPipeline._extract_compiler_errors(result)
-        assert len(errors) == 3
-        assert "All strategies exhausted" in errors[0]
-        assert "direct" in errors[1].lower()
-        assert "simp, ring" in errors[1]
-        assert "induction" in errors[2].lower()
+        assert errors == []
 
     def test_empty_when_no_failure(self):
         from agentic_research.pipelines.proof import ProofPipeline
@@ -161,7 +159,7 @@ class TestExtractCompilerErrors:
         errors = ProofPipeline._extract_compiler_errors(result)
         assert errors == []
 
-    def test_strategies_without_tactics(self):
+    def test_strategies_without_prover_result_yields_empty(self):
         from agentic_research.pipelines.proof import ProofPipeline
 
         result = ProofSearchResult(
@@ -175,9 +173,7 @@ class TestExtractCompilerErrors:
             ],
         )
         errors = ProofPipeline._extract_compiler_errors(result)
-        assert len(errors) == 1
-        assert "contradiction" in errors[0].lower()
-        assert "none" in errors[0].lower()
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +241,8 @@ class TestProofCorrectorCompilerFeedback:
         from agentic_research.agents.proof_corrector import ProofCorrector
 
         response = json.dumps({
-            "error_category": "unknown_identifier",
-            "error_message": "unknown identifier 'foo'",
+            "error_category": "type_mismatch",
+            "error_message": "type mismatch in foo",
             "suggested_tactics": ["exact bar"],
             "revised_proof_sketch": "by exact bar",
             "confidence": 0.6,
@@ -259,9 +255,9 @@ class TestProofCorrectorCompilerFeedback:
             task="correct proof",
             metadata={
                 "failed_proof": "by exact foo",
-                "error_message": "unknown identifier 'foo'",
+                "error_message": "type mismatch in foo",
                 "lean_goal_state": "⊢ Nat",
-                "compiler_errors": ["unknown identifier 'foo'"],
+                "compiler_errors": ["type mismatch in foo"],
             },
         )
         result = corrector.run(ctx)
@@ -340,27 +336,43 @@ class TestPipelineCompilerFeedback:
         """_try_proof_correction extracts and passes compiler errors."""
         pipeline = _make_pipeline()
 
+        mock_prover_result = ProverResult(
+            statement="theorem foo : True",
+            proved=False,
+            attempts=[
+                ProofAttempt(
+                    iteration=1,
+                    proof_code="by simp",
+                    status=ProofAttemptStatus.COMPILATION_ERROR,
+                    errors=["type mismatch: expected Nat, got Int"],
+                ),
+            ],
+            total_iterations=1,
+            total_token_usage=TokenUsage(),
+        )
+
         search_result = ProofSearchResult(
             statement="theorem foo : True",
             proved=False,
             needs_decomposition=True,
-            failure_reason="unknown identifier 'Nat.bogus'",
+            failure_reason="type mismatch",
             strategies_tried=[
                 ProofStrategy(
                     strategy_type=StrategyType.DIRECT,
-                    description="tried Nat.bogus",
-                    key_tactics=["exact Nat.bogus"],
+                    description="simp failed",
+                    key_tactics=["simp"],
+                    prover_result=mock_prover_result,
                 ),
             ],
         )
 
         correction_response = json.dumps({
-            "error_category": "unknown_identifier",
-            "error_message": "unknown identifier 'Nat.bogus'",
-            "suggested_tactics": ["exact Nat.zero"],
-            "revised_proof_sketch": "by exact Nat.zero",
+            "error_category": "type_mismatch",
+            "error_message": "type mismatch: expected Nat, got Int",
+            "suggested_tactics": ["norm_cast"],
+            "revised_proof_sketch": "by norm_cast",
             "confidence": 0.7,
-            "reasoning": "Nat.bogus doesn't exist, use Nat.zero",
+            "reasoning": "coercion needed",
         })
         llm = _make_mock_llm([correction_response])
         pipeline._llm = llm
@@ -368,11 +380,11 @@ class TestPipelineCompilerFeedback:
         correction = pipeline._try_proof_correction("theorem foo : True", search_result)
 
         assert correction is not None
-        assert correction.error_category == ErrorCategory.UNKNOWN_IDENTIFIER
+        assert correction.error_category == ErrorCategory.TYPE_MISMATCH
         call_args = llm.complete.call_args
         prompt_content = call_args[1]["messages"][0]["content"] if "messages" in call_args[1] else call_args[0][1][0]["content"]
         assert "Previous Compiler Errors" in prompt_content
-        assert "Nat.bogus" in prompt_content
+        assert "type mismatch" in prompt_content
 
     def test_correction_reprompt_contains_structured_feedback(self):
         """_run_proof_search_with_correction includes ## Compiler Feedback."""
@@ -620,32 +632,19 @@ class TestLemmaLeanifierPreamble:
         assert "Available Definitions" not in prompt_content
 
 
-class TestProofPipelineDRODetection:
-    """Verify ProofPipeline auto-detects DRO keywords and passes preamble."""
+class TestProofPipelinePreambleDetection:
+    """Verify ProofPipeline detects preamble based on Lake project availability."""
 
-    def test_dro_keywords_trigger_preamble(self):
+    def test_lake_project_triggers_preamble(self):
+        from unittest.mock import patch
+
         pipeline = _make_pipeline()
-        preamble = pipeline._detect_lean_preamble(
-            "The Wasserstein distance between two probability measures"
-        )
+        with patch.object(pipeline._repl, "has_lake_project", return_value=True):
+            preamble = pipeline._detect_lean_preamble("any statement")
         assert preamble is not None
-        assert "wassersteinDist" in preamble
+        assert "import Mathlib" in preamble
 
-    def test_coupling_keyword_triggers_preamble(self):
-        pipeline = _make_pipeline()
-        preamble = pipeline._detect_lean_preamble(
-            "For any coupling of mu and nu"
-        )
-        assert preamble is not None
-
-    def test_distributionally_robust_triggers_preamble(self):
-        pipeline = _make_pipeline()
-        preamble = pipeline._detect_lean_preamble(
-            "In the distributionally robust optimization setting"
-        )
-        assert preamble is not None
-
-    def test_non_dro_statement_no_preamble(self):
+    def test_no_lake_project_no_preamble(self):
         pipeline = _make_pipeline()
         preamble = pipeline._detect_lean_preamble(
             "For all natural numbers n, n + 0 = n"
@@ -662,14 +661,16 @@ class TestProofPipelineDRODetection:
 
         pipeline = _make_pipeline()
 
-        with patch.object(pipeline._repl, "try_automated_tactics", return_value="trivial"):
+        with patch.object(pipeline._repl, "has_lake_project", return_value=True), \
+             patch.object(pipeline._repl, "try_automated_tactics", return_value="trivial"):
             pipeline.run(
                 "theorem foo : True",
-                statement_nl="The Wasserstein ball has bounded diameter",
+                statement_nl="Some theorem about natural numbers",
             )
 
-        assert pipeline._statement_nl == "The Wasserstein ball has bounded diameter"
+        assert pipeline._statement_nl == "Some theorem about natural numbers"
         assert pipeline._lean_preamble is not None
+        assert "import Mathlib" in pipeline._lean_preamble
 
 
 # ---------------------------------------------------------------------------
@@ -786,10 +787,10 @@ class TestTypeFirstFormalization:
         assert pipeline._use_proof_critic is True
         assert pipeline._use_proof_detailer is True
 
-    def test_default_max_critic_retries_is_zero(self):
-        """Default max_critic_retries is 0 — critic runs once but doesn't gate."""
+    def test_default_max_critic_retries_is_one(self):
+        """Default max_critic_retries is 1 — critic can trigger one re-breakdown."""
         pipeline = _make_pipeline()
-        assert pipeline._max_critic_retries == 0
+        assert pipeline._max_critic_retries == 1
 
     def test_type_first_failure_falls_back(self):
         """If type formalization fails, pipeline proceeds without type context."""

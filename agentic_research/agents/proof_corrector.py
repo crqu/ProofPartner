@@ -82,6 +82,37 @@ class ProofCorrector(BaseAgent):
         super().__init__(name="proof_corrector", max_retries=1)
         self._llm = llm_client
 
+    _IMPORT_ERROR_PATTERNS = [
+        "failed to synthesize instance",
+        "unknown constant",
+        "unknown identifier",
+    ]
+
+    def _check_import_error_heuristic(
+        self,
+        error_message: str,
+        compiler_errors: list[str] | None,
+    ) -> ProofCorrection | None:
+        """Short-circuit to MISSING_IMPORT if all errors match import patterns."""
+        all_errors = list(compiler_errors or [])
+        if error_message:
+            all_errors.append(error_message)
+        if not all_errors:
+            return None
+        if all(
+            any(pat in err.lower() for pat in self._IMPORT_ERROR_PATTERNS)
+            for err in all_errors
+        ):
+            return ProofCorrection(
+                error_category=ErrorCategory.MISSING_IMPORT,
+                error_message=error_message,
+                suggested_tactics=["import Mathlib"],
+                revised_proof_sketch="",
+                confidence=0.9,
+                reasoning="All errors indicate missing imports or unresolved identifiers",
+            )
+        return None
+
     def correct(
         self,
         failed_proof: str,
@@ -97,6 +128,15 @@ class ProofCorrector(BaseAgent):
             prior_count=len(prior_attempts) if prior_attempts else 0,
             compiler_error_count=len(compiler_errors) if compiler_errors else 0,
         )
+
+        heuristic = self._check_import_error_heuristic(error_message, compiler_errors)
+        if heuristic is not None:
+            log.info(
+                "proof_corrector_import_heuristic",
+                category=heuristic.error_category.value,
+                confidence=heuristic.confidence,
+            )
+            return heuristic
 
         prior_text = "\n".join(
             f"Attempt {i + 1}:\n```lean\n{a}\n```" for i, a in enumerate(prior_attempts)

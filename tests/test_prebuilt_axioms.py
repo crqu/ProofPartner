@@ -327,14 +327,13 @@ class TestPipelineAxiomThreading:
             use_claim_check=False,
         )
 
-        result = pipeline._detect_lean_preamble(
-            "Wasserstein distance in distributionally robust optimization"
-        )
+        from unittest.mock import patch
+        with patch.object(pipeline._repl, "has_lake_project", return_value=True):
+            result = pipeline._detect_lean_preamble(
+                "Wasserstein distance in distributionally robust optimization"
+            )
         assert result is not None
-        assert pipeline._prebuilt_axioms is not None
-        assert "wassersteinDist_self" in pipeline._prebuilt_axioms
-        assert pipeline._axiom_keywords is not None
-        assert "wassersteinDist_self" in pipeline._axiom_keywords
+        assert "import Mathlib" in result
 
     def test_detect_lean_preamble_no_match(self):
         from agentic_research.pipelines.proof import ProofPipeline

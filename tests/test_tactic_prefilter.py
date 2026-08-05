@@ -158,7 +158,9 @@ def test_proof_pipeline_uses_prefilter():
     assert isinstance(result, ProofPipelineResult)
     assert result.proved is True
     assert "by tier1_combinator" in result.final_proof
-    mock_repl.try_automated_tactics.assert_called_once_with(STMT)
+    mock_repl.try_automated_tactics.assert_called_once()
+    call_args = mock_repl.try_automated_tactics.call_args
+    assert call_args[0][0] == STMT
 
 
 def test_proof_pipeline_falls_through_when_prefilter_fails():

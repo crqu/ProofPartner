@@ -224,10 +224,15 @@ class RecursiveProver(BaseAgent):
             prover_result = ProverResult.model_validate(result.result)
             error_msg = prover_result.failure_reason or "Proof search exhausted"
             if "timeout" not in error_msg.lower():
+                leaf_prior_attempts = [
+                    a.proof_code for a in prover_result.attempts
+                    if a.proof_code
+                ]
                 correction = self._proof_corrector.correct(
                     failed_proof=prover_result.final_proof or node.statement_lean,
                     error_message=error_msg,
                     lean_goal_state=node.statement_lean,
+                    prior_attempts=leaf_prior_attempts if leaf_prior_attempts else None,
                 )
                 tokens.input_tokens += self._proof_corrector.cumulative_tokens.input_tokens
                 tokens.output_tokens += self._proof_corrector.cumulative_tokens.output_tokens
@@ -247,6 +252,7 @@ class RecursiveProver(BaseAgent):
                         llm_client=self._llm,
                         lean_repl=self._repl,
                         config=self._prover_config,
+                        lean_preamble=self._lean_preamble,
                     )
                     retry_result = retry_prover.run(retry_ctx)
                     tokens.input_tokens += retry_result.token_usage.input_tokens
@@ -558,6 +564,8 @@ class RecursiveProver(BaseAgent):
         ("unknown identifier 'import'", ""),
         ("unknown identifier 'open'", ""),
         ("unknown identifier 'set_option'", ""),
+        ("failed to synthesize instance", ""),
+        ("unknown constant", ""),
     ]
 
     def _diagnose_failure(
@@ -591,7 +599,7 @@ class RecursiveProver(BaseAgent):
             parent_statement=node.statement_lean,
             child_declarations=child_decls,
             failed_proof=node.proof_code or "-- no proof attempt",
-            errors="Parent proof did not compile or close all goals",
+            errors=errors_str or "Parent proof did not compile or close all goals",
         )
 
         response = self._llm.complete(

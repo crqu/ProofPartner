@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from agentic_research.agents.base import BaseAgent
+from agentic_research.agents.lean_utils import _strip_preamble_lines
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.prompt_templates import (
     AXIOM_LEANIFY_SYSTEM,
@@ -77,7 +78,8 @@ class LemmaLeanifier(BaseAgent):
     def _compile(self, lean_code: str):
         """Execute lean_code in the REPL, prepending the preamble if set."""
         if self._lean_preamble:
-            full_code = self._lean_preamble + "\n\n" + lean_code
+            stripped = _strip_preamble_lines(lean_code)
+            full_code = self._lean_preamble + "\n\n" + stripped
         else:
             full_code = lean_code
         return self._repl.execute(full_code)

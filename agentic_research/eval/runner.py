@@ -12,6 +12,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
 from agentic_research.agents.llm_client import LLMClient
 from agentic_research.agents.nl_prover import NaturalLanguageProver
 from agentic_research.eval.benchmarks import load_minif2f, load_putnam_bench
@@ -93,7 +94,7 @@ def _select_problems(
 
 def _evaluate_proof_discovery(
     problem: Problem, config: EvalConfig, shared: _SharedResources
-) -> tuple[ProblemResult, ProofPipelineResult | None]:
+) -> tuple[ProblemResult, ProofPipelineResult | None, list[TrajectoryEvent], dict[str, float]]:
     """Evaluate proof discovery for a single problem using the ProofPipeline."""
     start = time.monotonic()
     events: list[TrajectoryEvent] = []
@@ -178,7 +179,7 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             error_message=f"Timeout after {config.timeout_seconds}s",
-        ), None
+        ), None, events, stage_timings
 
     if error_holder:
         exc = error_holder[0]
@@ -194,7 +195,7 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             error_message=str(exc),
-        ), None
+        ), None, events, stage_timings
 
     if not result_holder:
         return ProblemResult(
@@ -204,7 +205,7 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             error_message="Pipeline returned no result",
-        ), None
+        ), None, events, stage_timings
 
     pipeline_result = result_holder[0]
     usage = pipeline_result.total_token_usage
@@ -235,7 +236,7 @@ def _evaluate_proof_discovery(
             output_tokens=usage.output_tokens,
             cache_read_input_tokens=usage.cache_read_input_tokens,
             cache_creation_input_tokens=usage.cache_creation_input_tokens,
-        ), pipeline_result
+        ), pipeline_result, events, stage_timings
 
     log.debug("proof_discovery_failure", problem=problem.id, stage=pipeline_result.failure_stage)
     return ProblemResult(
@@ -251,7 +252,7 @@ def _evaluate_proof_discovery(
         output_tokens=usage.output_tokens,
         cache_read_input_tokens=usage.cache_read_input_tokens,
         cache_creation_input_tokens=usage.cache_creation_input_tokens,
-    ), pipeline_result
+    ), pipeline_result, events, stage_timings
 
 
 def _evaluate_conjecture_quality(
@@ -365,7 +366,7 @@ def run_eval(
                 attempt_config.seed = config.seed + attempt
 
             if config.mode == EvalMode.PROOF_DISCOVERY:
-                result, pipeline_result = _evaluate_proof_discovery(
+                result, pipeline_result, traj_events, traj_stage_timings = _evaluate_proof_discovery(
                     problem, attempt_config, shared,
                 )
             else:
@@ -374,6 +375,8 @@ def run_eval(
                 else:
                     result = _evaluate_end_to_end(problem, attempt_config, shared)
                 pipeline_result = None
+                traj_events = []
+                traj_stage_timings = {}
 
             if best_result is None or result.result == ProofResult.SUCCESS:
                 best_result = result
@@ -397,8 +400,8 @@ def run_eval(
                 problem=problem,
                 problem_result=best_result,
                 pipeline_result=best_pipeline_result,
-                events=[],
-                stage_timings={},
+                events=traj_events,
+                stage_timings=traj_stage_timings,
                 model=model,
                 config={
                     "timeout": config.timeout_seconds,

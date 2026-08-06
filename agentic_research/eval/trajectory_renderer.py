@@ -43,18 +43,6 @@ def _render_stages_table(trajectory: Trajectory) -> str:
     return "\n".join(lines)
 
 
-def _render_nl_sketch(trajectory: Trajectory) -> str:
-    pr = trajectory.pipeline_result
-    if not pr:
-        return ""
-    nl_sketch = getattr(pr, "nl_proof_sketch", None)
-    if nl_sketch is None and pr.search_result:
-        return ""
-    if not pr.recursive_result:
-        return ""
-    return ""
-
-
 def _render_lemma_tree(trajectory: Trajectory) -> str:
     pr = trajectory.pipeline_result
     if not pr or not pr.recursive_result or not pr.recursive_result.lemma_tree:

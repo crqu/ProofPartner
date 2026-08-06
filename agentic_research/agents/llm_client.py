@@ -192,9 +192,14 @@ class LLMClient:
     _TERMINAL_PATTERNS = ("content_policy", "invalid_request", "authentication", "permission")
 
     def _call_with_retries(self, kwargs: dict[str, Any]) -> Any:
+        use_streaming = self._is_vertex and "thinking" in kwargs
         last_exc: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
+                if use_streaming:
+                    log.info("llm_streaming_mode", reason="vertex_extended_thinking")
+                    with self._client.messages.stream(**kwargs) as stream:
+                        return stream.get_final_message()
                 return self._client.messages.create(**kwargs)
             except Exception as exc:
                 last_exc = exc

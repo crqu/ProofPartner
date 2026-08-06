@@ -289,6 +289,7 @@ class TestC7LlmClientRaisesOnTerminalErrors:
         llm._max_retries = 3
         llm._backoff_base = 0.01
         llm._backoff_max = 0.01
+        llm._is_vertex = False
 
         mock_client = MagicMock()
         mock_client.messages.create.side_effect = Exception(

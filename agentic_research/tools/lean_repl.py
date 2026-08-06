@@ -64,6 +64,7 @@ class ReplConfig:
     working_dir: str | None = None
     lake_env: str | None = None
     extra_args: list[str] = field(default_factory=list)
+    lake_project_dir: Path | None = None
 
 
 def detect_backend() -> ReplBackend:
@@ -159,6 +160,27 @@ def _parse_goals(output: str) -> list[ProofGoal]:
     return goals
 
 
+_INFRASTRUCTURE_PATTERNS = [
+    "does not exist",
+    "no such file",
+    "lake: command not",
+    "could not find",
+]
+
+
+def classify_compilation_error(error_msg: str) -> str:
+    """Classify a compilation error as 'infrastructure', 'compilation', or 'unknown'.
+
+    Infrastructure errors cannot be fixed by changing Lean code.
+    """
+    lower = error_msg.lower()
+    if any(pat in lower for pat in _INFRASTRUCTURE_PATTERNS):
+        return "infrastructure"
+    if any(kw in lower for kw in ("error:", "failed", "unknown identifier", "type mismatch")):
+        return "compilation"
+    return "unknown"
+
+
 class _MockBackend:
     """Deterministic mock: succeeds for ``sorry``-free code, fails otherwise."""
 
@@ -189,26 +211,47 @@ class _MockBackend:
         )
 
 
+_DEFAULT_LAKE_PROJECT_DIR = Path(
+    os.environ.get("LEAN_PROJECT_DIR", Path(__file__).parent.parent.parent / "proofpartner-lean")
+)
+
+
 class _SubprocessBackend:
-    _LAKE_PROJECT_DIR = Path(__file__).parent.parent.parent / "proofpartner-lean"
 
     def __init__(self, config: ReplConfig) -> None:
         self._config = config
         self._lake_available: bool | None = None
+        if config.lake_project_dir:
+            self._LAKE_PROJECT_DIR = config.lake_project_dir
+        else:
+            self._LAKE_PROJECT_DIR = _DEFAULT_LAKE_PROJECT_DIR
 
     def has_lake_project(self) -> bool:
         if self._lake_available is None:
             lakefile = self._LAKE_PROJECT_DIR / "lakefile.toml"
             has_lakefile = lakefile.is_file()
             has_lake_binary = shutil.which("lake") is not None
-            self._lake_available = has_lakefile and has_lake_binary
+            olean_path = (
+                self._LAKE_PROJECT_DIR / ".lake" / "packages" / "mathlib"
+                / ".lake" / "build" / "lib" / "lean" / "Mathlib.olean"
+            )
+            has_olean = olean_path.is_file()
+            self._lake_available = has_lakefile and has_lake_binary and has_olean
             log.info(
                 "lake_project_check",
                 path=str(self._LAKE_PROJECT_DIR),
                 has_lakefile=has_lakefile,
                 has_lake_binary=has_lake_binary,
+                has_olean=has_olean,
                 available=self._lake_available,
             )
+            if has_lakefile and has_lake_binary and not has_olean:
+                log.warning(
+                    "lake_project_olean_missing",
+                    path=str(self._LAKE_PROJECT_DIR),
+                    olean_path=str(olean_path),
+                    hint="Run 'lake build' in the project directory or set LEAN_PROJECT_DIR to a compiled environment",
+                )
         return self._lake_available
 
     def _compile_with_lake(self, code: str, timeout: int) -> CompilationResult:

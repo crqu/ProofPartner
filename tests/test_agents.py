@@ -78,11 +78,16 @@ class TestProverConfig:
         assert config.model == "claude-opus-4-6-20250616"
         assert config.temperature == 0.0
         assert config.max_tokens == 16384
+        assert config.thinking_budget == 40000
 
     def test_custom(self):
         config = ProverConfig(max_iterations=10, temperature=0.5)
         assert config.max_iterations == 10
         assert config.temperature == 0.5
+
+    def test_custom_thinking_budget(self):
+        config = ProverConfig(thinking_budget=60000)
+        assert config.thinking_budget == 60000
 
 
 class TestProofAttempt:
@@ -130,7 +135,7 @@ class TestProverResult:
 
 
 class TestLLMClientThinkingBudgetGuard:
-    """Verify LLMClient.complete() auto-adjusts max_tokens when thinking_budget exceeds it."""
+    """Verify LLMClient.complete() adds thinking_budget on top of max_tokens."""
 
     def _make_client(self, max_tokens: int = 4096):
         with patch("anthropic.Anthropic"):
@@ -152,7 +157,7 @@ class TestLLMClientThinkingBudgetGuard:
         )
         return resp
 
-    def test_auto_adjusts_when_thinking_budget_exceeds_max_tokens(self):
+    def test_thinking_budget_added_on_top_of_max_tokens(self):
         client = self._make_client(max_tokens=4096)
         client._client.messages.create = MagicMock(return_value=self._mock_response())
 
@@ -163,10 +168,10 @@ class TestLLMClientThinkingBudgetGuard:
         )
 
         call_kwargs = client._client.messages.create.call_args[1]
-        assert call_kwargs["max_tokens"] == 10000 + 4096
-        assert call_kwargs["thinking"] == {"type": "adaptive"}
+        assert call_kwargs["max_tokens"] == 4096 + 10000
+        assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
-    def test_no_adjustment_when_max_tokens_already_sufficient(self):
+    def test_large_max_tokens_still_adds_thinking_budget(self):
         client = self._make_client(max_tokens=20000)
         client._client.messages.create = MagicMock(return_value=self._mock_response())
 
@@ -177,7 +182,7 @@ class TestLLMClientThinkingBudgetGuard:
         )
 
         call_kwargs = client._client.messages.create.call_args[1]
-        assert call_kwargs["max_tokens"] == 20000
+        assert call_kwargs["max_tokens"] == 20000 + 10000
 
     def test_no_adjustment_without_extended_thinking(self):
         client = self._make_client(max_tokens=4096)
@@ -191,6 +196,20 @@ class TestLLMClientThinkingBudgetGuard:
 
         call_kwargs = client._client.messages.create.call_args[1]
         assert call_kwargs["max_tokens"] == 4096
+
+    def test_prover_default_budget_produces_correct_total(self):
+        client = self._make_client(max_tokens=16384)
+        client._client.messages.create = MagicMock(return_value=self._mock_response())
+
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            use_extended_thinking=True,
+            thinking_budget=40000,
+        )
+
+        call_kwargs = client._client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 16384 + 40000
+        assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 40000}
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +419,7 @@ class TestLLMClient:
             assert result.content == "Answer"
             call_kwargs = mock_client.messages.create.call_args[1]
             assert call_kwargs["temperature"] == 1
-            assert "thinking" in call_kwargs
+            assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
     def test_complete_with_cache(self):
         from agentic_research.agents.llm_client import LLMClient
@@ -430,6 +449,103 @@ class TestLLMClient:
             call_kwargs = mock_client.messages.create.call_args[1]
             assert isinstance(call_kwargs["system"], list)
             assert call_kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_vertex_extended_thinking_uses_streaming(self):
+        from agentic_research.agents.llm_client import LLMClient
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(type="text", text="streamed")]
+        mock_response.model = "claude-opus-4-6"
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(
+            input_tokens=10, output_tokens=5,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+
+        env = {
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "ANTHROPIC_VERTEX_PROJECT_ID": "my-project",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("anthropic.AnthropicVertex") as mock_vertex_cls:
+                mock_client = MagicMock()
+                mock_stream_ctx = MagicMock()
+                mock_stream_ctx.__enter__ = MagicMock(return_value=mock_stream_ctx)
+                mock_stream_ctx.__exit__ = MagicMock(return_value=False)
+                mock_stream_ctx.get_final_message.return_value = mock_response
+                mock_client.messages.stream.return_value = mock_stream_ctx
+                mock_vertex_cls.return_value = mock_client
+
+                client = LLMClient()
+                assert client.is_vertex is True
+
+                result = client.complete(
+                    messages=[{"role": "user", "content": "hi"}],
+                    use_extended_thinking=True,
+                )
+
+                mock_client.messages.stream.assert_called_once()
+                mock_client.messages.create.assert_not_called()
+                assert result.content == "streamed"
+
+    def test_vertex_without_thinking_uses_create(self):
+        from agentic_research.agents.llm_client import LLMClient
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(type="text", text="created")]
+        mock_response.model = "claude-opus-4-6"
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(
+            input_tokens=10, output_tokens=5,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+
+        env = {
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "ANTHROPIC_VERTEX_PROJECT_ID": "my-project",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("anthropic.AnthropicVertex") as mock_vertex_cls:
+                mock_client = MagicMock()
+                mock_client.messages.create.return_value = mock_response
+                mock_vertex_cls.return_value = mock_client
+
+                client = LLMClient()
+                result = client.complete(
+                    messages=[{"role": "user", "content": "hi"}],
+                    use_extended_thinking=False,
+                )
+
+                mock_client.messages.create.assert_called_once()
+                mock_client.messages.stream.assert_not_called()
+                assert result.content == "created"
+
+    def test_non_vertex_with_thinking_uses_create(self):
+        from agentic_research.agents.llm_client import LLMClient
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(type="text", text="direct")]
+        mock_response.model = "claude-opus-4-6-20250616"
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(
+            input_tokens=10, output_tokens=5,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+
+        with patch("anthropic.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = mock_response
+            mock_anthropic.return_value = mock_client
+
+            client = LLMClient(api_key="test-key")
+            result = client.complete(
+                messages=[{"role": "user", "content": "hi"}],
+                use_extended_thinking=True,
+            )
+
+            mock_client.messages.create.assert_called_once()
+            mock_client.messages.stream.assert_not_called()
+            assert result.content == "direct"
 
     def test_extract_json_from_code_block(self):
         from agentic_research.agents.llm_client import LLMClient
@@ -727,6 +843,46 @@ class TestIterativeProver:
         assert prover.config.max_iterations == 2
         assert prover.config.model == "claude-opus-4-6-20250616"
         assert prover.name == "iterative_prover"
+
+    def test_prover_passes_thinking_budget_when_extended_thinking(self):
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        llm = _make_mock_llm_client(["theorem foo : True := trivial"])
+
+        prover = IterativeProver(
+            llm_client=llm,
+            lean_repl=repl,
+            config=ProverConfig(max_iterations=1, use_extended_thinking=True, thinking_budget=50000),
+        )
+
+        ctx = AgentContext(task="theorem foo : True")
+        prover.run(ctx)
+
+        call_kwargs = llm.complete.call_args[1]
+        assert call_kwargs["use_extended_thinking"] is True
+        assert call_kwargs["thinking_budget"] == 50000
+
+    def test_prover_passes_default_budget_when_not_extended_thinking(self):
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        llm = _make_mock_llm_client(["theorem foo : True := trivial"])
+
+        prover = IterativeProver(
+            llm_client=llm,
+            lean_repl=repl,
+            config=ProverConfig(max_iterations=1, use_extended_thinking=False),
+        )
+
+        ctx = AgentContext(task="theorem foo : True")
+        prover.run(ctx)
+
+        call_kwargs = llm.complete.call_args[1]
+        assert call_kwargs["use_extended_thinking"] is False
+        assert call_kwargs["thinking_budget"] == 10000
 
 
 class TestExtractLeanCode:

@@ -31,7 +31,7 @@ from agentic_research.models.agents import (
     TokenUsage,
 )
 from agentic_research.models.tools import CompilationStatus
-from agentic_research.tools.lean_repl import LeanRepl
+from agentic_research.tools.lean_repl import LeanRepl, classify_compilation_error
 
 log = get_logger(__name__)
 
@@ -209,6 +209,16 @@ class IterativeProver(BaseAgent):
                 error_count=len(compilation.errors),
             )
 
+            if compilation.errors:
+                error_class = classify_compilation_error(compilation.errors[0])
+                if error_class == "infrastructure":
+                    log.warning(
+                        "prover_infrastructure_error",
+                        iteration=iteration,
+                        error=compilation.errors[0],
+                    )
+                    break
+
         return ProverResult(
             statement=statement,
             proved=False,
@@ -270,5 +280,6 @@ class IterativeProver(BaseAgent):
             max_tokens=effective_max_tokens,
             temperature=self._config.temperature,
             use_extended_thinking=self._config.use_extended_thinking,
+            thinking_budget=self._config.thinking_budget if self._config.use_extended_thinking else 10000,
             use_cache=True,
         )

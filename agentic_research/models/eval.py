@@ -157,3 +157,4 @@ class EvalConfig(BaseModel):
     thinking_budget: int = Field(default=10000, description="Token budget for extended thinking")
     max_critic_retries: int = Field(default=3, description="Max proof critic retry rounds")
     use_intent_judge: bool = Field(default=True, description="Enable intent judge for type formalization")
+    problem_filter: list[str] | None = Field(default=None, description="Filter problems by name substring")

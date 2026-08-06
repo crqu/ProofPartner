@@ -57,6 +57,13 @@ def test_eval_config_defaults():
     assert config.sample_size is None
 
 
+def test_error_category_has_infrastructure():
+    from agentic_research.models.proof import ErrorCategory
+
+    assert ErrorCategory.INFRASTRUCTURE.value == "infrastructure"
+    assert ErrorCategory.INFRASTRUCTURE == ErrorCategory("infrastructure")
+
+
 def test_wilson_interval_serialization():
     wi = WilsonInterval(lower=0.1, upper=0.5, center=0.3, n=100, successes=30)
     data = wi.model_dump()

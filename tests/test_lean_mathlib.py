@@ -49,9 +49,13 @@ def test_compile_uses_temp_file():
     assert before == after, "Temp file was not cleaned up"
 
 
-def test_subprocess_backend_detects_lake_project():
-    """_SubprocessBackend.has_lake_project() returns True when lakefile and lake binary exist."""
-    config = ReplConfig(backend=ReplBackend.SUBPROCESS)
+def test_subprocess_backend_detects_lake_project(tmp_path: Path):
+    """_SubprocessBackend.has_lake_project() returns True when lakefile, lake binary, and olean exist."""
+    (tmp_path / "lakefile.toml").write_text('[package]\nname = "test"\nscope = "leanprover-community"\n[[require]]\nname = "mathlib"')
+    olean_dir = tmp_path / ".lake" / "packages" / "mathlib" / ".lake" / "build" / "lib" / "lean"
+    olean_dir.mkdir(parents=True)
+    (olean_dir / "Mathlib.olean").write_bytes(b"")
+    config = ReplConfig(backend=ReplBackend.SUBPROCESS, lake_project_dir=tmp_path)
     backend = _SubprocessBackend(config)
     with patch("shutil.which", return_value="/usr/bin/lake"):
         assert backend.has_lake_project() is True
@@ -59,12 +63,10 @@ def test_subprocess_backend_detects_lake_project():
 
 def test_subprocess_backend_fallback_without_lake_project():
     """When lake project is absent, has_lake_project() returns False."""
-    config = ReplConfig(backend=ReplBackend.SUBPROCESS)
-    backend = _SubprocessBackend(config)
     fake_path = Path("/nonexistent/proofpartner-lean")
-    with patch.object(type(backend), "_LAKE_PROJECT_DIR", fake_path):
-        backend._lake_available = None
-        assert backend.has_lake_project() is False
+    config = ReplConfig(backend=ReplBackend.SUBPROCESS, lake_project_dir=fake_path)
+    backend = _SubprocessBackend(config)
+    assert backend.has_lake_project() is False
 
 
 def test_subprocess_backend_fallback_without_lake_binary():

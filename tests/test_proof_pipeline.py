@@ -1706,3 +1706,74 @@ class TestPipelineWiringH2H3H4H5:
         assert captured_kwargs["leanifier"] is not None
         assert captured_kwargs["breakdown"] is not None
         assert captured_kwargs["proof_corrector"] is not None
+
+
+# ---------------------------------------------------------------------------
+# _has_infrastructure_errors
+# ---------------------------------------------------------------------------
+
+
+class TestHasInfrastructureErrors:
+    def test_detects_olean_error(self):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            strategies_tried=[
+                ProofStrategy(
+                    strategy_type=StrategyType.DIRECT,
+                    description="direct attempt",
+                    prover_result=ProverResult(
+                        statement="theorem foo : True",
+                        proved=False,
+                        attempts=[
+                            ProofAttempt(
+                                iteration=1,
+                                proof_code="by sorry",
+                                status=ProofAttemptStatus.COMPILATION_ERROR,
+                                errors=["Mathlib.olean does not exist"],
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        )
+        assert ProofPipeline._has_infrastructure_errors(result) is True
+
+    def test_false_for_compilation_errors(self):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            strategies_tried=[
+                ProofStrategy(
+                    strategy_type=StrategyType.DIRECT,
+                    description="direct attempt",
+                    prover_result=ProverResult(
+                        statement="theorem foo : True",
+                        proved=False,
+                        attempts=[
+                            ProofAttempt(
+                                iteration=1,
+                                proof_code="by sorry",
+                                status=ProofAttemptStatus.COMPILATION_ERROR,
+                                errors=["unknown identifier 'foo'"],
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        )
+        assert ProofPipeline._has_infrastructure_errors(result) is False
+
+    def test_false_for_empty_strategies(self):
+        from agentic_research.pipelines.proof import ProofPipeline
+
+        result = ProofSearchResult(
+            statement="theorem foo : True",
+            proved=False,
+            strategies_tried=[],
+        )
+        assert ProofPipeline._has_infrastructure_errors(result) is False

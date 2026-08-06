@@ -78,11 +78,16 @@ class TestProverConfig:
         assert config.model == "claude-opus-4-6-20250616"
         assert config.temperature == 0.0
         assert config.max_tokens == 16384
+        assert config.thinking_budget == 40000
 
     def test_custom(self):
         config = ProverConfig(max_iterations=10, temperature=0.5)
         assert config.max_iterations == 10
         assert config.temperature == 0.5
+
+    def test_custom_thinking_budget(self):
+        config = ProverConfig(thinking_budget=60000)
+        assert config.thinking_budget == 60000
 
 
 class TestProofAttempt:
@@ -130,7 +135,7 @@ class TestProverResult:
 
 
 class TestLLMClientThinkingBudgetGuard:
-    """Verify LLMClient.complete() auto-adjusts max_tokens when thinking_budget exceeds it."""
+    """Verify LLMClient.complete() adds thinking_budget on top of max_tokens."""
 
     def _make_client(self, max_tokens: int = 4096):
         with patch("anthropic.Anthropic"):
@@ -152,7 +157,7 @@ class TestLLMClientThinkingBudgetGuard:
         )
         return resp
 
-    def test_auto_adjusts_when_thinking_budget_exceeds_max_tokens(self):
+    def test_thinking_budget_added_on_top_of_max_tokens(self):
         client = self._make_client(max_tokens=4096)
         client._client.messages.create = MagicMock(return_value=self._mock_response())
 
@@ -163,10 +168,10 @@ class TestLLMClientThinkingBudgetGuard:
         )
 
         call_kwargs = client._client.messages.create.call_args[1]
-        assert call_kwargs["max_tokens"] == 10000 + 4096
-        assert call_kwargs["thinking"] == {"type": "adaptive"}
+        assert call_kwargs["max_tokens"] == 4096 + 10000
+        assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
-    def test_no_adjustment_when_max_tokens_already_sufficient(self):
+    def test_large_max_tokens_still_adds_thinking_budget(self):
         client = self._make_client(max_tokens=20000)
         client._client.messages.create = MagicMock(return_value=self._mock_response())
 
@@ -177,7 +182,7 @@ class TestLLMClientThinkingBudgetGuard:
         )
 
         call_kwargs = client._client.messages.create.call_args[1]
-        assert call_kwargs["max_tokens"] == 20000
+        assert call_kwargs["max_tokens"] == 20000 + 10000
 
     def test_no_adjustment_without_extended_thinking(self):
         client = self._make_client(max_tokens=4096)
@@ -191,6 +196,20 @@ class TestLLMClientThinkingBudgetGuard:
 
         call_kwargs = client._client.messages.create.call_args[1]
         assert call_kwargs["max_tokens"] == 4096
+
+    def test_prover_default_budget_produces_correct_total(self):
+        client = self._make_client(max_tokens=16384)
+        client._client.messages.create = MagicMock(return_value=self._mock_response())
+
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            use_extended_thinking=True,
+            thinking_budget=40000,
+        )
+
+        call_kwargs = client._client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == 16384 + 40000
+        assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 40000}
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +419,7 @@ class TestLLMClient:
             assert result.content == "Answer"
             call_kwargs = mock_client.messages.create.call_args[1]
             assert call_kwargs["temperature"] == 1
-            assert "thinking" in call_kwargs
+            assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
     def test_complete_with_cache(self):
         from agentic_research.agents.llm_client import LLMClient
@@ -824,6 +843,46 @@ class TestIterativeProver:
         assert prover.config.max_iterations == 2
         assert prover.config.model == "claude-opus-4-6-20250616"
         assert prover.name == "iterative_prover"
+
+    def test_prover_passes_thinking_budget_when_extended_thinking(self):
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        llm = _make_mock_llm_client(["theorem foo : True := trivial"])
+
+        prover = IterativeProver(
+            llm_client=llm,
+            lean_repl=repl,
+            config=ProverConfig(max_iterations=1, use_extended_thinking=True, thinking_budget=50000),
+        )
+
+        ctx = AgentContext(task="theorem foo : True")
+        prover.run(ctx)
+
+        call_kwargs = llm.complete.call_args[1]
+        assert call_kwargs["use_extended_thinking"] is True
+        assert call_kwargs["thinking_budget"] == 50000
+
+    def test_prover_passes_default_budget_when_not_extended_thinking(self):
+        from agentic_research.agents.prover import IterativeProver
+        from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, ReplConfig
+
+        repl = LeanRepl(ReplConfig(backend=ReplBackend.MOCK))
+        llm = _make_mock_llm_client(["theorem foo : True := trivial"])
+
+        prover = IterativeProver(
+            llm_client=llm,
+            lean_repl=repl,
+            config=ProverConfig(max_iterations=1, use_extended_thinking=False),
+        )
+
+        ctx = AgentContext(task="theorem foo : True")
+        prover.run(ctx)
+
+        call_kwargs = llm.complete.call_args[1]
+        assert call_kwargs["use_extended_thinking"] is False
+        assert call_kwargs["thinking_budget"] == 10000
 
 
 class TestExtractLeanCode:

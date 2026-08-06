@@ -65,6 +65,7 @@ class ProverConfig(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=1.0)
     max_tokens: int = Field(default=16384, ge=1)
     use_extended_thinking: bool = False
+    thinking_budget: int = Field(default=40000, ge=1000, description="Max thinking tokens for extended thinking mode")
     lean_timeout_seconds: int = Field(default=60, ge=1)
 
 

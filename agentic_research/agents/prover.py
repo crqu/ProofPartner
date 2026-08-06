@@ -280,5 +280,6 @@ class IterativeProver(BaseAgent):
             max_tokens=effective_max_tokens,
             temperature=self._config.temperature,
             use_extended_thinking=self._config.use_extended_thinking,
+            thinking_budget=self._config.thinking_budget if self._config.use_extended_thinking else 10000,
             use_cache=True,
         )

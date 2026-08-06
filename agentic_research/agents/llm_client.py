@@ -121,8 +121,8 @@ class LLMClient:
         resolved_max = max_tokens or self._max_tokens
         resolved_temp = temperature if temperature is not None else self._temperature
 
-        if use_extended_thinking and thinking_budget and resolved_max <= thinking_budget:
-            resolved_max = thinking_budget + 4096
+        if use_extended_thinking and thinking_budget:
+            resolved_max += thinking_budget
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -140,7 +140,7 @@ class LLMClient:
 
         if use_extended_thinking:
             kwargs["temperature"] = 1
-            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
         else:
             kwargs["temperature"] = resolved_temp
 

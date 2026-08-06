@@ -184,7 +184,7 @@ class TestLemmaLeanifierSearchCache:
 
 
 class TestAdaptiveThinking:
-    """Verify the thinking type is 'adaptive' in LLM calls."""
+    """Verify the thinking type is 'enabled' with budget_tokens in LLM calls."""
 
     def _make_client(self):
         with patch("anthropic.Anthropic"):
@@ -206,7 +206,7 @@ class TestAdaptiveThinking:
         )
         return resp
 
-    def test_thinking_type_is_adaptive(self):
+    def test_thinking_type_is_enabled_with_budget(self):
         client = self._make_client()
         client._client.messages.create = MagicMock(return_value=self._mock_response())
 
@@ -217,7 +217,7 @@ class TestAdaptiveThinking:
         )
 
         call_kwargs = client._client.messages.create.call_args[1]
-        assert call_kwargs["thinking"] == {"type": "adaptive"}
+        assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
     def test_no_thinking_when_disabled(self):
         client = self._make_client()

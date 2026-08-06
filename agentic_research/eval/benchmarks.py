@@ -44,6 +44,28 @@ def _infer_split(file_path: str) -> ProblemSplit:
     return ProblemSplit.VALIDATION
 
 
+def _extract_docstring(content: str, theorem_pos: int) -> str:
+    """Extract the Lean 4 docstring (/-- ... -/) immediately preceding a theorem.
+
+    Finds the last /-- ... -/ block before theorem_pos.
+    """
+    before = content[:theorem_pos]
+    matches = list(re.finditer(r"/--\s*(.*?)\s*-/", before, re.DOTALL))
+    if matches:
+        last = matches[-1]
+        between = before[last.end():]
+        if between.strip() == "":
+            lines = last.group(1).strip().splitlines()
+            return "\n".join(line.strip() for line in lines)
+    return ""
+
+
+_HEADER_KEYWORDS = frozenset([
+    "import", "open", "def", "noncomputable", "set_option", "variable",
+    "instance", "section", "namespace", "attribute", "abbrev",
+])
+
+
 def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
     """Parse a Lean 4 file and extract theorem statements."""
     content = path.read_text(encoding="utf-8")
@@ -55,14 +77,25 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
         re.MULTILINE | re.DOTALL,
     )
 
+    in_docstring = False
     for line in content.splitlines():
         stripped = line.strip()
-        if stripped.startswith("import") or stripped.startswith("open"):
-            header_lines.append(line)
-        elif stripped.startswith("theorem") or stripped.startswith("lemma"):
+        if stripped.startswith("/--"):
+            in_docstring = True
+            if "-/" in stripped[3:]:
+                in_docstring = False
+            continue
+        if in_docstring:
+            if "-/" in stripped:
+                in_docstring = False
+            continue
+        if stripped.startswith("theorem") or stripped.startswith("lemma"):
             break
+        first_word = stripped.split()[0] if stripped.split() else ""
+        if first_word in _HEADER_KEYWORDS or stripped == "":
+            header_lines.append(line)
 
-    header = "\n".join(header_lines)
+    header = "\n".join(header_lines).strip()
 
     solution_defs: dict[str, str] = {}
     solution_pattern = re.compile(
@@ -91,6 +124,8 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
 
         statement = _extract_statement(full_text)
 
+        natural_language = _extract_docstring(content, match.start())
+
         sol_def = solution_defs.get(name)
         if sol_def:
             sol_name = name + "_solution"
@@ -111,6 +146,7 @@ def _parse_lean4_file(path: Path, source: BenchmarkSource) -> list[Problem]:
                 difficulty=difficulty,
                 lean_header=header,
                 lean_statement=statement,
+                natural_language=natural_language,
                 file_path=str(path),
             )
         )

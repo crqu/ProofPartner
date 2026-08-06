@@ -68,6 +68,12 @@ def _select_problems(
     else:
         problems = problem_set.validation_problems
 
+    if config.problem_filter:
+        problems = [
+            p for p in problems
+            if any(f in p.name for f in config.problem_filter)
+        ]
+
     if config.sample_size is not None and config.sample_size < len(problems):
         rng = random.Random(config.seed)
         problems = rng.sample(problems, config.sample_size)
@@ -339,6 +345,8 @@ def main() -> None:
     @click.option("--thinking-budget", type=int, default=10000, help="Token budget for extended thinking")
     @click.option("--max-critic-retries", type=int, default=3, help="Max proof critic retry rounds")
     @click.option("--use-intent-judge/--no-use-intent-judge", default=True, help="Enable intent judge for type formalization")
+    @click.option("--timeout", type=int, default=600, help="Timeout per problem in seconds")
+    @click.option("--problem-filter", type=str, multiple=True, default=(), help="Filter problems by name substring (can be repeated)")
     def run(
         mode: str,
         benchmark: str,
@@ -354,6 +362,8 @@ def main() -> None:
         thinking_budget: int,
         max_critic_retries: int,
         use_intent_judge: bool,
+        timeout: int,
+        problem_filter: tuple[str, ...],
     ) -> None:
         """Run the evaluation harness."""
         configure_logging(json_output=json_logs)
@@ -371,6 +381,8 @@ def main() -> None:
             thinking_budget=thinking_budget,
             max_critic_retries=max_critic_retries,
             use_intent_judge=use_intent_judge,
+            timeout_seconds=timeout,
+            problem_filter=list(problem_filter) if problem_filter else None,
         )
 
         report = run_eval(config)

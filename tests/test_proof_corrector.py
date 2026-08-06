@@ -101,7 +101,7 @@ class TestErrorCategory:
         assert ErrorCategory.OTHER == "other"
 
     def test_all_values_count(self):
-        assert len(ErrorCategory) == 7
+        assert len(ErrorCategory) == 8
 
 
 # ---------------------------------------------------------------------------

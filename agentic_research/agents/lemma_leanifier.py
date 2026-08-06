@@ -27,7 +27,7 @@ from agentic_research.models.agents import (
 )
 from agentic_research.models.proof import LemmaTree, ProofNode
 from agentic_research.models.tools import CompilationStatus, ToolStatus
-from agentic_research.tools.lean_repl import LeanRepl
+from agentic_research.tools.lean_repl import LeanRepl, classify_compilation_error
 from agentic_research.tools.lean_search import LeanSearch
 
 log = get_logger(__name__)
@@ -279,6 +279,17 @@ class LemmaLeanifier(BaseAgent):
         if compilation.compilation_status == CompilationStatus.OK:
             return lean_code, total_tokens
 
+        if compilation.errors:
+            error_class = classify_compilation_error(compilation.errors[0])
+            if error_class == "infrastructure":
+                log.warning(
+                    "lemma_leanify_infrastructure_error",
+                    node_id=node.node_id,
+                    retry=0,
+                    error=compilation.errors[0],
+                )
+                return None, total_tokens
+
         previous_lean_code: str | None = None
         for retry in range(1, self._max_compile_retries + 1):
             log.info("lemma_leanify_retry", node_id=node.node_id, retry=retry)
@@ -313,6 +324,17 @@ class LemmaLeanifier(BaseAgent):
 
             if compilation.compilation_status == CompilationStatus.OK:
                 return lean_code, total_tokens
+
+            if compilation.errors:
+                error_class = classify_compilation_error(compilation.errors[0])
+                if error_class == "infrastructure":
+                    log.warning(
+                        "lemma_leanify_infrastructure_error",
+                        node_id=node.node_id,
+                        retry=retry,
+                        error=compilation.errors[0],
+                    )
+                    break
 
         return None, total_tokens
 

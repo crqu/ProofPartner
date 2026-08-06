@@ -31,7 +31,7 @@ from agentic_research.models.agents import (
     TokenUsage,
 )
 from agentic_research.models.tools import CompilationStatus
-from agentic_research.tools.lean_repl import LeanRepl
+from agentic_research.tools.lean_repl import LeanRepl, classify_compilation_error
 
 log = get_logger(__name__)
 
@@ -208,6 +208,16 @@ class IterativeProver(BaseAgent):
                 status=attempt_status.value,
                 error_count=len(compilation.errors),
             )
+
+            if compilation.errors:
+                error_class = classify_compilation_error(compilation.errors[0])
+                if error_class == "infrastructure":
+                    log.warning(
+                        "prover_infrastructure_error",
+                        iteration=iteration,
+                        error=compilation.errors[0],
+                    )
+                    break
 
         return ProverResult(
             statement=statement,

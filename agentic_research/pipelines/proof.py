@@ -56,7 +56,7 @@ from agentic_research.models.proof import (
     RecursiveProofResult,
 )
 from agentic_research.models.verification import IntentVerdictType
-from agentic_research.tools.lean_repl import LeanRepl, ReplBackend
+from agentic_research.tools.lean_repl import LeanRepl, ReplBackend, classify_compilation_error
 from agentic_research.tools.lean_search import LeanSearch
 
 log = get_logger(__name__)
@@ -214,6 +214,10 @@ class ProofPipeline:
                     claim_check_passed=True,
                     total_token_usage=self._total_tokens,
                 )
+
+        if not force_decomposition and self._has_infrastructure_errors(search_result):
+            log.warning("proof_pipeline_skip_correction_infrastructure")
+            force_decomposition = True
 
         if not force_decomposition:
             correction = self._try_proof_correction(lean_statement, search_result)
@@ -1259,6 +1263,12 @@ class ProofPipeline:
                     if hasattr(attempt, "errors") and attempt.errors:
                         errors.extend(attempt.errors)
         return errors
+
+    @staticmethod
+    def _has_infrastructure_errors(search_result: ProofSearchResult) -> bool:
+        """Check if proof search failures are caused by infrastructure issues."""
+        errors = ProofPipeline._extract_compiler_errors(search_result)
+        return any(classify_compilation_error(e) == "infrastructure" for e in errors)
 
     def _try_proof_correction(
         self, statement: str, search_result: ProofSearchResult

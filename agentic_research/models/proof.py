@@ -143,6 +143,7 @@ class ErrorCategory(str, Enum):
     UNIVERSE_LEVEL = "universe_level"
     UNKNOWN_IDENTIFIER = "unknown_identifier"
     TIMEOUT = "timeout"
+    INFRASTRUCTURE = "infrastructure"
     OTHER = "other"
 
 

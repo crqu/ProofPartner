@@ -85,7 +85,7 @@ agentic-research formalize 'the square root of 2 is irrational' --budget 3.00
 4. **Theorem formalization** — produces the final Lean 4 theorem statement
 5. **Intent verification** — the IntentJudge checks that the formalization captures your idea
 
-This uses the *type-first formalization* approach from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134).
+The type-first formalization technique originates from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134); ProofPartner extends it with formalization caching and interactive candidate selection.
 
 **Expected output:**
 

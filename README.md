@@ -10,7 +10,7 @@ An agentic mathematical research partner that transforms rough mathematical idea
 
 Existing theorem proving tools — [Hilbert](https://arxiv.org/abs/2502.11842), [ReProver](https://arxiv.org/abs/2306.15626), [LeanDojo](https://leandojo.org/) — require pre-formalized Lean 4 statements as input. Researchers with rough mathematical intuitions have no tool to go from *idea* to *formal proof*. ProofPartner fills this gap: it explores mathematical ideas, generates formal conjectures, verifies intent, searches for counterexamples, and discovers proofs, all in a single interactive pipeline.
 
-ProofPartner adapts the *type-first formalization* framework and *auxiliary lemma validation* technique from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134), extending them into a full agentic research loop with conjecture generation, intent verification, counterexample search, and proof discovery.
+ProofPartner introduces an *idea-to-proof research loop* — an agentic pipeline that generates conjectures from rough ideas, verifies intent, searches for counterexamples, discovers proofs, and automatically refines on failure. Within its proof pipeline, ProofPartner incorporates the *type-first formalization* and *auxiliary lemma validation* techniques from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134), while adding automated tactic pre-filtering, multi-strategy proof search, structured error correction, and production hardening (checkpointing, circuit breakers, cost control).
 
 ### Background Knowledge
 
@@ -209,7 +209,7 @@ For a detailed description of each stage, agent inventory, data flow, and cost c
 
 ### Proof Pipeline
 
-The proof pipeline follows the architecture from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134):
+The proof pipeline combines techniques from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134) (type-first formalization, parent-before-children proving, faithfulness judge) with several novel stages:
 
 1. **Automated Tactics** — 2-tier Lean 4 combinator: Tier 1 tries 15 finishing tactics (`omega`, `decide`, `norm_num`, `ring`, `simp_all`, `field_simp`, `positivity`, `tauto`, `grind`, etc.) in a single `first | ...` call; Tier 2 falls back to `aesop` for general proof search
 2. **ProofSearch** — iterative proving with extended thinking (2 strategies × 2 iterations)
@@ -277,7 +277,7 @@ If you use ProofPartner in your research, please cite:
 }
 ```
 
-ProofPartner adapts the type-first formalization framework from the following work — please also cite:
+ProofPartner's proof pipeline incorporates type-first formalization techniques from the following work — please also cite:
 
 ```bibtex
 @article{moakhar2026beyond,

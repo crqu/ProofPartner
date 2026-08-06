@@ -34,7 +34,7 @@ references:
         given-names: MohammadTaghi
     year: 2026
     url: "https://arxiv.org/abs/2606.31134"
-    notes: "ProofPartner adapts the type-first formalization framework and auxiliary lemma validation technique from this work."
+    notes: "ProofPartner's proof pipeline incorporates the type-first formalization and auxiliary lemma validation techniques from this work."
   - type: article
     title: "LeanDojo: Theorem Proving with Retrieval-Augmented Language Models"
     authors:

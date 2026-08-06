@@ -84,7 +84,7 @@ orchestrator.resume_from_checkpoint(checkpoint_id)
 
 See [CITATION.cff](../CITATION.cff) in the repository root for machine-readable citation metadata. BibTeX entries are available in the [README Citation section](../README.md#citation).
 
-Please also cite the foundational work that ProofPartner builds on:
+ProofPartner's proof pipeline incorporates type-first formalization techniques from:
 
 > Soltani Moakhar, A., Gholami, I., Springer, M., JafariRaviz, M., & Hajiaghayi, M. (2026). Beyond the Library: An Agentic Framework for Autoformalizing Research Mathematics. arXiv:2606.31134.
 
@@ -94,7 +94,7 @@ Currently, ProofPartner supports the Anthropic API (direct and Vertex AI) only. 
 
 ## What does "type-first formalization" mean?
 
-Instead of directly translating a natural-language conjecture into a Lean 4 theorem statement, ProofPartner first identifies and formalizes the *types* (mathematical structures) needed, validates them with auxiliary lemmas, and only then builds the theorem statement on top of the accepted types. This approach is adapted from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134) and produces more robust formalizations.
+Instead of directly translating a natural-language conjecture into a Lean 4 theorem statement, ProofPartner first identifies and formalizes the *types* (mathematical structures) needed, validates them with auxiliary lemmas, and only then builds the theorem statement on top of the accepted types. This technique originates from [Moakhar et al. (2026)](https://arxiv.org/abs/2606.31134); ProofPartner extends it with formalization caching, data package injection, and interactive candidate selection.
 
 See the [Architecture](ARCHITECTURE.md) document for details on each pipeline stage.
 

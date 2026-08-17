@@ -538,11 +538,21 @@ class RecursiveProver(BaseAgent):
                 f"Suggested fix: {node.failure_diagnosis.suggested_fix}\n"
             )
 
+        use_thinking = self._prover_config.parent_extended_thinking
+        log.info(
+            "parent_assembly_extended_thinking",
+            thinking_budget=self._prover_config.thinking_budget,
+            parent_extended_thinking=use_thinking,
+        )
+        thinking_kwargs: dict[str, object] = {}
+        if use_thinking:
+            thinking_kwargs["thinking_budget"] = self._prover_config.thinking_budget
         response = self._llm.complete(
             system=PARENT_PROOF_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
-            use_extended_thinking=self._prover_config.use_extended_thinking,
+            use_extended_thinking=use_thinking,
             use_cache=True,
+            **thinking_kwargs,
         )
         tokens.input_tokens += response.token_usage.input_tokens
         tokens.output_tokens += response.token_usage.output_tokens

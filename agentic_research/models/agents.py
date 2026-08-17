@@ -66,6 +66,7 @@ class ProverConfig(BaseModel):
     max_tokens: int = Field(default=16384, ge=1)
     use_extended_thinking: bool = False
     thinking_budget: int = Field(default=40000, ge=1000, description="Max thinking tokens for extended thinking mode")
+    parent_extended_thinking: bool = Field(default=True, description="Use extended thinking for parent assembly step in recursive prover")
     lean_timeout_seconds: int = Field(default=60, ge=1)
 
 

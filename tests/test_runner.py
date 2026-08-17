@@ -87,13 +87,17 @@ class TestEvaluateProofDiscoverySuccess:
         config = _make_config()
         shared = _make_shared()
 
-        result = _evaluate_proof_discovery(problem, config, shared)
+        result, pipeline_res, events, stage_timings = _evaluate_proof_discovery(problem, config, shared)
 
         assert result.result == ProofResult.SUCCESS
         assert result.proof == "theorem test : True := by trivial"
         assert result.token_usage == 380
         assert result.attempts == 1
         assert result.duration_seconds >= 0
+        assert pipeline_res is not None
+        assert pipeline_res.proved is True
+        assert isinstance(events, list)
+        assert isinstance(stage_timings, dict)
 
 
 class TestEvaluateProofDiscoveryFailure:
@@ -111,12 +115,13 @@ class TestEvaluateProofDiscoveryFailure:
         mock_pipeline.run.return_value = pipeline_result
         mock_pipeline_cls.return_value = mock_pipeline
 
-        result = _evaluate_proof_discovery(_make_problem(), _make_config(), _make_shared())
+        result, pipeline_res, events, stage_timings = _evaluate_proof_discovery(_make_problem(), _make_config(), _make_shared())
 
         assert result.result == ProofResult.FAILURE
         assert result.error_message == "All strategies exhausted"
         assert result.token_usage == 600
         assert result.proof is None
+        assert pipeline_res is not None
 
 
 class TestEvaluateProofDiscoveryTimeout:
@@ -132,10 +137,11 @@ class TestEvaluateProofDiscoveryTimeout:
         mock_pipeline_cls.return_value = mock_pipeline
 
         config = _make_config(timeout=1)
-        result = _evaluate_proof_discovery(_make_problem(), config, _make_shared())
+        result, pipeline_res, events, stage_timings = _evaluate_proof_discovery(_make_problem(), config, _make_shared())
 
         assert result.result == ProofResult.TIMEOUT
         assert "Timeout" in (result.error_message or "")
+        assert pipeline_res is None
 
 
 class TestEvaluateProofDiscoveryError:
@@ -146,10 +152,11 @@ class TestEvaluateProofDiscoveryError:
         mock_pipeline.run.side_effect = RuntimeError("API connection failed")
         mock_pipeline_cls.return_value = mock_pipeline
 
-        result = _evaluate_proof_discovery(_make_problem(), _make_config(), _make_shared())
+        result, pipeline_res, events, stage_timings = _evaluate_proof_discovery(_make_problem(), _make_config(), _make_shared())
 
         assert result.result == ProofResult.ERROR
         assert "API connection failed" in (result.error_message or "")
+        assert pipeline_res is None
 
 
 class TestHeaderPrepending:

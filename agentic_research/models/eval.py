@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
+
+from agentic_research.models.agents import TokenUsage
+from agentic_research.models.proof import ProofPipelineResult
 
 
 class BenchmarkSource(str, Enum):
@@ -158,3 +162,26 @@ class EvalConfig(BaseModel):
     max_critic_retries: int = Field(default=3, description="Max proof critic retry rounds")
     use_intent_judge: bool = Field(default=True, description="Enable intent judge for type formalization")
     problem_filter: list[str] | None = Field(default=None, description="Filter problems by name substring")
+    output: str | None = Field(default=None, description="Output file path for JSON report")
+
+
+class TrajectoryEvent(BaseModel):
+    """A timestamped event in the proof pipeline execution."""
+
+    timestamp_s: float = Field(description="Seconds since pipeline start")
+    stage: str = Field(description="Pipeline stage name")
+    event_type: str = Field(description="Event type: enter/exit/backtrack/lean_check/critique")
+    detail: str = Field(default="")
+    token_usage: TokenUsage | None = None
+
+
+class Trajectory(BaseModel):
+    """Full trajectory of a single problem through the proof pipeline."""
+
+    problem: Problem
+    problem_result: ProblemResult
+    pipeline_result: ProofPipelineResult | None = None
+    events: list[TrajectoryEvent] = Field(default_factory=list)
+    stage_timings: dict[str, float] = Field(default_factory=dict)
+    model: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)

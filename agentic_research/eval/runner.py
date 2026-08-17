@@ -6,6 +6,7 @@ Run via: python -m agentic_research.eval.runner
 from __future__ import annotations
 
 import copy
+import json
 import random
 import threading
 import time
@@ -28,6 +29,8 @@ from agentic_research.models.eval import (
     ProblemSplit,
     ProofResult,
     ScoreReport,
+    Trajectory,
+    TrajectoryEvent,
 )
 from agentic_research.models.proof import ProofPipelineResult
 from agentic_research.pipelines.proof import ProofPipeline
@@ -91,12 +94,33 @@ def _select_problems(
 
 def _evaluate_proof_discovery(
     problem: Problem, config: EvalConfig, shared: _SharedResources
-) -> ProblemResult:
+) -> tuple[ProblemResult, ProofPipelineResult | None, list[TrajectoryEvent], dict[str, float]]:
     """Evaluate proof discovery for a single problem using the ProofPipeline."""
     start = time.monotonic()
+    events: list[TrajectoryEvent] = []
+    stage_timings: dict[str, float] = {}
+    _stage_start: dict[str, float] = {}
+
+    def _progress_callback(stage: str, message: str) -> None:
+        elapsed = time.monotonic() - start
+        if _stage_start:
+            prev_stage = next(reversed(_stage_start))
+            if prev_stage not in stage_timings:
+                stage_timings[prev_stage] = elapsed - _stage_start[prev_stage]
+        _stage_start[stage] = elapsed
+        events.append(TrajectoryEvent(
+            timestamp_s=round(elapsed, 3),
+            stage=stage,
+            event_type="enter",
+            detail=message,
+        ))
+        log.info("pipeline_stage", problem=problem.id, stage=stage, detail=message)
 
     lean_repl = LeanRepl(ReplConfig(backend=detect_backend()))
-    prover_config = ProverConfig(use_extended_thinking=config.use_extended_thinking)
+    prover_config = ProverConfig(
+        use_extended_thinking=config.use_extended_thinking,
+        thinking_budget=config.thinking_budget,
+    )
     nl_prover = NaturalLanguageProver(
         llm_client=shared.llm_client,
         prover_config=prover_config,
@@ -110,6 +134,7 @@ def _evaluate_proof_discovery(
         use_intent_judge=config.use_intent_judge,
         nl_prover=nl_prover,
         use_nl_proof_stage=True,
+        progress_callback=_progress_callback,
     )
 
     full_statement = (
@@ -137,7 +162,15 @@ def _evaluate_proof_discovery(
 
     duration = round(time.monotonic() - start, 3)
 
+    for s, t in _stage_start.items():
+        if s not in stage_timings:
+            stage_timings[s] = round(duration - t, 3)
+
     if thread.is_alive():
+        events.append(TrajectoryEvent(
+            timestamp_s=duration, stage="timeout", event_type="exit",
+            detail=f"Timeout after {config.timeout_seconds}s",
+        ))
         log.warning("proof_discovery_timeout", problem=problem.id, timeout=config.timeout_seconds)
         return ProblemResult(
             problem_id=problem.id,
@@ -146,10 +179,14 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             error_message=f"Timeout after {config.timeout_seconds}s",
-        )
+        ), None, events, stage_timings
 
     if error_holder:
         exc = error_holder[0]
+        events.append(TrajectoryEvent(
+            timestamp_s=duration, stage="error", event_type="exit",
+            detail=str(exc),
+        ))
         log.error("proof_discovery_error", problem=problem.id, error=str(exc))
         return ProblemResult(
             problem_id=problem.id,
@@ -158,7 +195,7 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             error_message=str(exc),
-        )
+        ), None, events, stage_timings
 
     if not result_holder:
         return ProblemResult(
@@ -168,13 +205,21 @@ def _evaluate_proof_discovery(
             attempts=1,
             duration_seconds=duration,
             error_message="Pipeline returned no result",
-        )
+        ), None, events, stage_timings
 
     pipeline_result = result_holder[0]
     usage = pipeline_result.total_token_usage
     token_total = _sum_token_usage(usage)
     model = config.model or "claude-opus-4-6"
     cost = estimate_cost(usage, model)
+
+    events.append(TrajectoryEvent(
+        timestamp_s=duration,
+        stage="complete",
+        event_type="exit",
+        detail="proved" if pipeline_result.proved else (pipeline_result.failure_stage or "failed"),
+        token_usage=usage,
+    ))
 
     if pipeline_result.proved:
         log.info("proof_discovery_success", problem=problem.id)
@@ -191,7 +236,7 @@ def _evaluate_proof_discovery(
             output_tokens=usage.output_tokens,
             cache_read_input_tokens=usage.cache_read_input_tokens,
             cache_creation_input_tokens=usage.cache_creation_input_tokens,
-        )
+        ), pipeline_result, events, stage_timings
 
     log.debug("proof_discovery_failure", problem=problem.id, stage=pipeline_result.failure_stage)
     return ProblemResult(
@@ -207,7 +252,7 @@ def _evaluate_proof_discovery(
         output_tokens=usage.output_tokens,
         cache_read_input_tokens=usage.cache_read_input_tokens,
         cache_creation_input_tokens=usage.cache_creation_input_tokens,
-    )
+    ), pipeline_result, events, stage_timings
 
 
 def _evaluate_conjecture_quality(
@@ -242,14 +287,35 @@ def _evaluate_end_to_end(
     )
 
 
-_EVAL_DISPATCH = {
-    EvalMode.PROOF_DISCOVERY: _evaluate_proof_discovery,
-    EvalMode.CONJECTURE_QUALITY: _evaluate_conjecture_quality,
-    EvalMode.END_TO_END: _evaluate_end_to_end,
-}
+def _load_completed_ids(jsonl_path: Path) -> set[str]:
+    """Load completed problem IDs from an existing JSONL file for resume."""
+    completed: set[str] = set()
+    if not jsonl_path.exists():
+        return completed
+    for line in jsonl_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if "problem_id" in data:
+                completed.add(data["problem_id"])
+        except json.JSONDecodeError:
+            continue
+    return completed
 
 
-def run_eval(config: EvalConfig) -> ScoreReport:
+def _append_jsonl(path: Path, result: ProblemResult) -> None:
+    """Append a single ProblemResult as a JSON line."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(result.model_dump_json() + "\n")
+
+
+def run_eval(
+    config: EvalConfig,
+    trajectory_dir: Path | None = None,
+) -> ScoreReport:
     """Run a full evaluation pass."""
     log.info(
         "eval_starting",
@@ -270,25 +336,93 @@ def run_eval(config: EvalConfig) -> ScoreReport:
         lean_search = LeanSearch(SearchConfig(backend=detect_search_backend()))
         shared = _SharedResources(llm_client=llm_client, lean_search=lean_search)
 
-    evaluate_fn = _EVAL_DISPATCH[config.mode]
+    jsonl_path = Path(f"{config.output}.jsonl") if config.output else None
+    completed_ids: set[str] = set()
+    if jsonl_path:
+        completed_ids = _load_completed_ids(jsonl_path)
+        if completed_ids:
+            log.info("eval_resuming", completed=len(completed_ids), total=len(problems))
 
+    if trajectory_dir:
+        trajectory_dir.mkdir(parents=True, exist_ok=True)
+
+    eval_start = time.monotonic()
     results: list[ProblemResult] = []
+    proved_count = 0
+    total_cost = 0.0
+
     for i, problem in enumerate(problems):
+        if problem.id in completed_ids:
+            log.info("eval_problem_skipped", problem=problem.id, reason="already_completed")
+            continue
+
         log.info("eval_problem", index=i + 1, total=len(problems), problem=problem.id)
 
         best_result: ProblemResult | None = None
+        best_pipeline_result: ProofPipelineResult | None = None
         for attempt in range(config.pass_k):
             attempt_config = copy.copy(config)
             if attempt_config.seed is not None:
                 attempt_config.seed = config.seed + attempt
-            result = evaluate_fn(problem, attempt_config, shared)
+
+            if config.mode == EvalMode.PROOF_DISCOVERY:
+                result, pipeline_result, traj_events, traj_stage_timings = _evaluate_proof_discovery(
+                    problem, attempt_config, shared,
+                )
+            else:
+                if config.mode == EvalMode.CONJECTURE_QUALITY:
+                    result = _evaluate_conjecture_quality(problem, attempt_config, shared)
+                else:
+                    result = _evaluate_end_to_end(problem, attempt_config, shared)
+                pipeline_result = None
+                traj_events = []
+                traj_stage_timings = {}
+
             if best_result is None or result.result == ProofResult.SUCCESS:
                 best_result = result
+                best_pipeline_result = pipeline_result
             if result.result == ProofResult.SUCCESS:
                 break
 
         assert best_result is not None
         results.append(best_result)
+
+        if best_result.result == ProofResult.SUCCESS:
+            proved_count += 1
+        total_cost += best_result.cost_usd
+
+        if jsonl_path:
+            _append_jsonl(jsonl_path, best_result)
+
+        if trajectory_dir and config.mode == EvalMode.PROOF_DISCOVERY:
+            model = config.model or "claude-opus-4-6"
+            traj = Trajectory(
+                problem=problem,
+                problem_result=best_result,
+                pipeline_result=best_pipeline_result,
+                events=traj_events,
+                stage_timings=traj_stage_timings,
+                model=model,
+                config={
+                    "timeout": config.timeout_seconds,
+                    "extended_thinking": config.use_extended_thinking,
+                    "thinking_budget": config.thinking_budget,
+                    "seed": config.seed,
+                    "max_critic_retries": config.max_critic_retries,
+                },
+            )
+            safe_id = problem.id.replace("/", "_")
+            traj_path = trajectory_dir / f"{safe_id}.json"
+            traj_path.write_text(traj.model_dump_json(indent=2))
+
+        elapsed_min = round((time.monotonic() - eval_start) / 60, 1)
+        log.info(
+            "eval_progress",
+            progress=f"[{i + 1}/{len(problems)}]",
+            proved=proved_count,
+            elapsed_min=elapsed_min,
+            cost_usd=f"${total_cost:.2f}",
+        )
 
     report = score_eval_run(
         results=results,
@@ -347,6 +481,7 @@ def main() -> None:
     @click.option("--use-intent-judge/--no-use-intent-judge", default=True, help="Enable intent judge for type formalization")
     @click.option("--timeout", type=int, default=600, help="Timeout per problem in seconds")
     @click.option("--problem-filter", type=str, multiple=True, default=(), help="Filter problems by name substring (can be repeated)")
+    @click.option("--trajectory-dir", type=click.Path(), default=None, help="Write per-problem trajectory JSON files to this directory")
     def run(
         mode: str,
         benchmark: str,
@@ -364,6 +499,7 @@ def main() -> None:
         use_intent_judge: bool,
         timeout: int,
         problem_filter: tuple[str, ...],
+        trajectory_dir: str | None,
     ) -> None:
         """Run the evaluation harness."""
         configure_logging(json_output=json_logs)
@@ -383,9 +519,11 @@ def main() -> None:
             use_intent_judge=use_intent_judge,
             timeout_seconds=timeout,
             problem_filter=list(problem_filter) if problem_filter else None,
+            output=output,
         )
 
-        report = run_eval(config)
+        traj_dir = Path(trajectory_dir) if trajectory_dir else None
+        report = run_eval(config, trajectory_dir=traj_dir)
 
         report_json = report.model_dump_json(indent=2)
 
